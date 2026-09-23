@@ -108,3 +108,10 @@ pod 侧 fsauth/netauth 从「后命中者胜（last-wins）」反转为「首命
 只在命令间触发，管不到单个命令内部；兜底 = TaskTable 30min 墙钟（到期 124）+
 bounded output。命令级 CPU 硬上限不可行（Go 无 per-goroutine CPU 计量；墙钟会误杀
 合法 `sleep`）——维持 30min 有界 + 管理面可杀的设计。
+
+**并发容量闸**（同日用户拍板，glue TaskTable）：单任务墙钟只限时长不限并发——
+bg fan-out（一次调用 `for i in $(seq 1 64); do bg run 'yes >/dev/null'; done`）/多会话
+并发可占满全部核。TaskTable.Start 加两级上限：全局 max(2, NumCPU/2)（同进程其他
+负载永远留一半核）+ per-owner 4（cloud owner="u:"+uid，host owner="host"，bg run
+经 ctx 继承同 owner）；超额快速拒绝（排队本身是 DoS 放大器）。进程内 per-task CPU
+配额依旧不可行，硬保证在部署层（aic 服务跑 cgroup CPU limit，运维侧补）。
