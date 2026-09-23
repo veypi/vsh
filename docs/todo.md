@@ -113,9 +113,9 @@
 - [x] 3.3.2 cp/mv/rm 注册为 page exec 命令（os/fs_cmds.js + os.html aiCommands；ls/rg 同注册；req-reply 180s 同通道）
 
 ### 3.4 cloud vbox 规则表 + grant 接线（D15）【3c】
-- [ ] 3.4.1 cloud 初始表行序：temp（表头）→ 便利根 rw 会话目录 → ro /u/{uid}、ro skills；DefaultWrite deny
-- [ ] 3.4.2 grant fs/net cloud 域：temp 行插表头、会话级、恒 4 级审批
-- [ ] 3.4.3 host grant 四域对接 vbox（temp 内存/permanent 落 config 语义不变；行序反转后 permanent 追加位置按新语义）
+- [x] 3.4.1 cloud 初始表行序：temp（表头）→ 便利根 rw 会话目录 → ro /u/{uid}、ro skills；DefaultWrite deny（temp 存储 = aic/libs/tools 包级 sync.Map，CloudFSRules 内部插表头，exec 引擎与 fs 工具自动同表）
+- [x] 3.4.2 grant fs/net cloud 域：temp 行插表头、会话级、恒 4 级审批（GrantCloudFS jail 校验/GrantCloudNet host:port 校验；cloudGrant 真实现；NetClient Rules 改 per-sid（ctx 注入会话键，glue SessionFromContext）——进程级并集跨用户泄漏不允许；私网阻断保持 SSRF 硬底线不可授权）
+- [x] 3.4.3 host grant 四域对接 vbox（vshGrant 补 ssh 域入 sshPol——执行面随 ssh 工具重建另接；DenyHit 拒批删除（grant.go 两分支 + fsauth decide/netauth Allowed 旧硬底线同步翻转，temp 插表头压 deny）；permanent 追加位置核对：append 文件尾 + cfg 组内反转 = 新行位于 cfg 段最前，新语义下正确，TestSnapshotCfgTailAppendWins 钉死；NetClient host 侧改 SnapshotVbox(sid)，SnapshotAllVbox 删除——偏差#2 消除）
 
 ### 3.5 删除面清理（无清单无灰度）【3b】
 - [x] 3.5.1 aic-pod `libs/vcore` 整体（ls/rg 逻辑已移植 aic-pod/libs/fsx；quota_fs.go 在 aic/libs/tools 保留、Fetcher 配额由 glue NetClient + QuotaFS backing 承接）
@@ -126,8 +126,8 @@
 - [x] 3.5.6 `grep -r aic-pod/libs/vcore` 为空（验收 11；vcore 目录物理删除）
 
 ### 3.6 存量配置迁移【3c】
-- [ ] 3.6.1 mbp/win 两台开发机 config.yaml fs_rules 人工过一遍（first-wins 下含义反转），结果记 FORK.md
-- [ ] 3.6.2 caps/exec_allow 种子白名单核对（host 不暴露 shell/解释器）
+- [x] 3.6.1 mbp config.yaml 人工核对（2026-09-24 用户确认无需改动；单行 rw:/var/run/docker.sock 无次序问题，net/ssh 空）——结果记 FORK.md；win pending（机器不在线）
+- [x] 3.6.2 caps/exec_allow 种子白名单核对（mbp exec_allow 空——无 shell/解释器，通过；win pending）
 
 ### 3.7 M3 出口（v4.3：三个提交点各自冒烟）
 - [ ] 3.7.1 3a 冒烟（3.1 后，用户重启后端）：exec script 三端（cloud/host/page）

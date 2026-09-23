@@ -58,6 +58,15 @@ git cherry-pick <sha>   # 冲突点预期集中在改名面，逐文件处理
 
 ## 存量 config.yaml 行序迁移提醒（vbox 语义反转）
 
+（3.6.1 核对结果，2026-09-24）**mbp**：`fs_rules` 仅 `rw:/var/run/docker.sock` 单行（无次序问题）；
+`net_rules`/`ssh_rules` 空；`exec_allow` 空（无 shell/解释器，3.6.2 通过）；`fs_policy: deny` /
+`net_policy: open` / `ssh_policy: deny` 不变——**无需改动**。用户确认「config 没啥要改的」。
+win 侧 pending（机器不在线）。
+
+迁移判读规则（供 win/后续机器用）：首命中生效 + cfg 组内反转（文件末行最先生效）；
+旧「先宽行后窄行覆盖」写法在新语义下反转，需把窄行挪前；文件尾 permanent grant 追加的
+`rw:` 行现在最先生效，注意是否意外压过前面的 `deny:` 行。
+
 pod 侧 fsauth/netauth 从「后命中者胜（last-wins）」反转为「首命中生效（first-wins）」
 （见 design.md §11.5）。**开发者机器（mbp / win）上的存量 config.yaml `fs_rules`
 行序在两种语义下含义相反**——切换 vbox 前必须人工过一遍（todo M3.6.1）。
