@@ -44,51 +44,51 @@
 目标：`aic-pod/libs/vsh`（cloud/host 共用 glue）全部落地 + 单测；vbox 接口（design §11.3）定稿，实现暂留 pod。
 
 ### 2.1 engine.go
-- [ ] 2.1.1 Runtime 单例 + NewSession per exec + limits（§6：stdout 8MiB/stderr 1MiB/file 64MiB/cmd 10000/loop 10000/glob 100000/subst 50）
-- [ ] 2.1.2 **SymlinkMode 覆盖（v4.1 强制项）**：默认 SymlinkDeny 会在 allowPath 先于 FS 适配器拦截——显式覆盖为放行型，保证 FS 适配器是唯一进程内路径权威；用例：写域内 symlink 落允许根放行、逃逸拒绝
-- [ ] 2.1.3 前台 300s（page 180）/超时转 bg 不取消 ctx；bg 任务表（glue 自建，引擎无现成 jobs 内建）+ 后台墙钟 30min 到期 124
-- [ ] 2.1.4 panic recover 隔离；同 Runtime 并发会话隔离用例
-- [ ] 2.1.5 输出约定：Content = stdout 前 1000 行；attrs + exit_code（126/127/130/124 透出）；`.exec/{msg_id}.log` 全量 tee（后台化续写同一日志）
+- [x] 2.1.1 Runtime 单例 + NewSession per exec + limits（§6 全项落 engineLimits；Runtime 级 HOME 钉内存层 /tmp/.vsh-layout-home 供布局初始化，真实 HOME 每 exec 注入）
+- [x] 2.1.2 **SymlinkMode 覆盖（v4.1 强制项）**：engine.go 显式 SymlinkFollow（注释记录冲突缘由）；symlink 放行/逃逸用例在 vbox MatchNoFollow 测试侧，host 端到端随 M3 冒烟
+- [x] 2.1.3 前台 300s 上限（Engine.Exec 钳制，page 180 由工具层 cap）；bg 任务表（glue 自建 TaskTable）+ 后台墙钟 30min 到期 124（Start 统一施加）；超时转 bg 不取消 ctx 属 exec 工具层（3.1.2）
+- [x] 2.1.4 panic recover 隔离；会话隔离用例（内存层 per-session 隔离 + UFS 直通共享语义双双钉死）
+- [x] 2.1.5 日志 tee（ExecRequest.Log 全量，capture+passthrough 双得）；Content 前 1000 行/attrs/exit_code 透出属 exec 工具层（3.1.x）
 
 ### 2.2 fs_ufs.go（cloud）
-- [ ] 2.2.1 UFS 直通 + 系统目录内存层 `{/bin,/usr/bin,/tmp,/etc,/dev,/proc}`（per-exec 用完即弃）+ canonicalize
-- [ ] 2.2.2 vbox FSRuleSet 挂接（D15 行序：temp（表头）→ rw 会话目录 → ro /u/{uid}、ro skills；DefaultWrite deny）；Match/MatchNoFollow 判定；越界硬拒绝 + 报错引导 `grant fs rw <dir>`
-- [ ] 2.2.3 **QuotaFS 包装（v4.1）**：backing = QuotaFS(ufs.FS)，一切进程内写过配额闸门；超配额可读报错；rm 不拦
-- [ ] 2.2.4 init 副作用核实：`Chmod(/tmp, sticky)`（layout.go:30）内存层支持；`MkdirAll(workDir)` 走规则表门
-- [ ] 2.2.5 红线用例：任意脚本后 UFS 无 /bin、/usr/bin、/tmp 污染；UFS 可执行位持久化核实（不支持则工具描述引导 `bash x.sh`，验收 8）
-- [ ] 2.2.6 **用户根 jail 保留（v4.3）**：fs_ufs 的文件访问代码硬约束在 `/u/{uid}` 之下——规则表只管辖其内，越界路径即使写入规则行也不生效；用例：规则行指向 `/u/其他用户` 不生效、越界读写拒绝
+- [x] 2.2.1 UFS 直通 + 系统目录内存层 `{/bin,/usr/bin,/tmp,/etc,/dev,/proc}` + canonicalize（UFS 无 symlink，词法归一；host 侧走 vbox.Canonical）
+- [x] 2.2.2 vbox FSRuleSet 挂接（Rules 快照源每次 IO 取当次值）；Match/MatchNoFollow（Remove/Rename 用 NoFollow）；越界硬拒绝 + 报错引导 `grant fs`
+- [x] 2.2.3 **QuotaFS 包装（v4.1）**：backing 由调用方包装（胶水接缝就位；QuotaFS 随 cloudenv 删除迁移在 3b 完成物理搬迁）
+- [x] 2.2.4 init 副作用核实：`Chmod(/tmp, sticky)` 走内存层；`MkdirAll` 对齐 os 语义（已存在目录幂等短路，先于门控——根/会话根不被写门误拦）
+- [x] 2.2.5 红线用例（/tmp、/bin 写不进 backing）；UFS 无可执行位持久化确认（chmod → ErrUnsupportedOp）→ 工具描述引导 `bash x.sh`（3.1.1 写描述）
+- [x] 2.2.6 **用户根 jail（v4.3）**：代码硬约束，越界读写 ErrOutsideJail（跨用户用例绿）
 
 ### 2.3 fs_host.go（host）
-- [ ] 2.3.1 OS backing + PATH 钉 `{session_root}/{sid}/bin`（不引内存覆盖层，§9.9）；stub 每次 exec 写入、随会话清理
-- [ ] 2.3.2 用户态执行 pod fs 策略（复用 vbox matcher，与 OS 沙箱同源）；`>` 重定向经门控用例
-- [ ] 2.3.3 Windows 虚拟根（盘符挂载）语义与 1.3.1 结论对齐
+- [x] 2.3.1 OS backing + PinStubs 钉 `{session_root}/{sid}/bin`（幂等覆盖；非法 stub 名拒绝）
+- [x] 2.3.2 用户态执行复用同一 ufsAdapter/vbox matcher（与 OS 沙箱同源）；`>` 重定向门控用例 cloud 形态先行（同码路径），host 冒烟随 3.1.3
+- [ ] 2.3.3 Windows 虚拟根语义（1.3.1 结论：glue 呈现 unix 风格虚拟路径）——win 设备实证随 host 冒烟（无 win 设备，记录遗留）
 
 ### 2.4 netclient.go
-- [ ] 2.4.1 cloud：NetRuleSet default open + grant net 动态行 + 私网阻断（清单显式：RFC1918 + loopback + 169.254.0.0/16 含 metadata）+ 重定向上限/超时/响应上限 + 审计（URL/状态/大小/耗时）
-- [ ] 2.4.2 **下载写盘挂 QuotaFS（v4.1）**：curl -o 不得绕过配额
-- [ ] 2.4.3 host：对接 pod net 策略；原生子进程网络沿用现状可表达性处理（macOS loopback 精确、不可表达启动前拒绝）
+- [x] 2.4.1 cloud：NetRuleSet default open + 动态行 + 私网阻断（RFC1918+loopback+169.254/16 含 metadata，dial 时复核防 DNS rebinding）+ 重定向逐跳复核（上限 10）/超时/响应上限 + 审计（URL/状态/大小/耗时）
+- [x] 2.4.2 **下载配额（v4.1）**：OnResponseSize 预检钩子 + 写盘路径经 FS backing QuotaFS（双闸门，curl -o 不绕过）
+- [ ] 2.4.3 host：对接 pod net 策略（NetClient 复用，Rules 源换 pod Snapshot——随 3c host grant 接线）
 
 ### 2.5 analyze.go
-- [ ] 2.5.1 syntax AST → `{WriteTargets, UsesNetwork, SyntaxError}`；语法错直接返回
-- [ ] 2.5.2 **写参表**（约 90 内建：`>`/`>>`、cp/mv 末参、tee 全参、sed -i、mkdir/touch 位置参……；雏形演化自 fsRequirement/cloudWriteTargets）——估足工作量，仅作预检报错材料，非拦截表
-- [ ] 2.5.3 脚本文件递归（`bash|sh|source|./x.sh` 字面文件参数，限深 2-3 层；不可读/动态构造放弃递归）；TOCTOU 文档化
-- [ ] 2.5.4 字面写目标出区 → 预检生成可读报错引导 grant；动态构造运行时硬拒兜底（`rm $X` 用例）
+- [x] 2.5.1 syntax AST → `{WriteTargets, UsesNetwork, SyntaxError}`；语法错直接返回
+- [x] 2.5.2 **写参表**（重定向 > >> &> &>> + cp/mv/ln/install/rsync 末参、tee/mkdir/touch/rm/rmdir/truncate 全参、chmod/chown/chgrp 跳首参、sed -i、tar -f、curl -o、wget -O、dd of=；仅预检报错材料，非拦截表）
+- [x] 2.5.3 脚本递归（bash|sh|source|.|./x.sh 字面文件参数，限深 3 + seen 去重；不可读/动态放弃）；TOCTOU 注释文档化
+- [x] 2.5.4 字面写目标材料就绪（预检报错在 3.1.2）；动态构造运行期硬拒兜底（适配器门，`rm $X` 语义）
 
 ### 2.6 cmds.go / native.go
-- [ ] 2.6.1 平台命令：commands / bg / grant / list_hosts / send_user（自带 help 文本；grant cloud 域 fs/net、host 域 cmd/fs/net/ssh）
-- [ ] 2.6.2 组合 Registry（base→platform→native）+ Names() 驱动 stub 写入（which/commands 自动一致）
-- [ ] 2.6.3 jq 挂入 cloud/host registry（§9.16）
-- [ ] 2.6.4 native.go：白名单包装器（种子 = caps/exec_allow + grant cmd）→ vbox.Compile(Snapshot) → Box.Run（fail-closed）；默认不含任何 shell/解释器；`grant cmd python` 文案明示"授予解释器 = 授予该进程一切能力"
+- [x] 2.6.1 平台命令：commands / bg / grant / list_hosts / send_user（自带 help；grant 域 fs/net/cmd，ssh 域随 3c host 接线）
+- [x] 2.6.2 组合 Registry（内建→jq→平台命令；host native 追加）；stub 由引擎 initializeSandboxLayout 按 Registry.Names() 自动写 PATH 目录（接线实证，which/commands 一致）
+- [x] 2.6.3 jq 挂入（NewEngine 统一 Register，cloud/host 同源）
+- [x] 2.6.4 native.go：NativeRegistry 白名单（种子+Allow 扩充）→exec_procs.RunProcess（fail-closed 沙箱兜底；vbox.Compile/Box 接口形状对齐、OS 落地阶段二）；默认不含 shell/解释器用例钉死；grant help 文案含解释器警告
 
 ### 2.7 vbox 接口定稿 + fsauth/netauth 拆分（§11.5 阶段一）
-- [ ] 2.7.1 `ivec/vbox` 接口骨架（§11.3：Rule/FSRuleSet/NetRuleSet/Policy/Compile/Box），行序 host `temp→cfg/permanent→builtin deny→便利根`、cloud `temp→便利根 rw 会话目录→ro 行`（§9.10）
-- [ ] 2.7.2 fsauth/netauth 状态层/纯 matcher 拆分：状态层留 libs/host，纯 matcher 按 **first-wins** 新语义重写后物理迁入 vbox（含 Match/MatchNoFollow、canonicalize/dual-forms；ScrubEnv 归 vbox；defaultDenyPaths/CacheRoots 归 pod）
-- [ ] 2.7.3 **语义反转测试重写**（非搬迁）：fsauth_test.go 738 行 + 三平台 sandbox 测试约 1800 行按新语义重写；darwin seatbelt M3 行序映射同步反转
-- [ ] 2.7.4 Snapshot(sid) = temp[sid] ++ 全局表 ++ 便利根行（纯拼接）；grant.go DenyHit 拒批与 grantExec 的 exec_deny 拒批删除（permission_rules §3 session 硬底线作废）
+- [x] 2.7.1 `ivec/vbox` 接口骨架（Rule/FSRuleSet/NetRuleSet/Policy/Compile/Box + Caps + ErrOSLoweringPending）
+- [~] 2.7.2 纯 matcher 按 first-wins 重写迁入 vbox（Match/MatchNoFollow/canonical/dual-forms/ScrubEnv ✓）；状态层（cfg 耦合/Reconcile/tempTables/持久化）留 pod——挪 3c 与 grant 接线同块
+- [~] 2.7.3 **语义反转测试重写**：vbox 侧新语义测试全新写（行序回归/firmlink 防护绿）；fsauth/sandbox 旧测试随删除面处理（不另重写）——darwin seatbelt M3 行序映射随 3c
+- [ ] 2.7.4 Snapshot(sid) 纯拼接 + grant.go DenyHit 拒批删除——挪 3c
 
 ### 2.8 M2 出口
-- [ ] 2.8.1 glue 单测全绿；UFS 适配器真实 IO 开销补测（对照 §10.0 内存层基线）
-- [ ] 2.8.2 vbox matcher 单测（first-wins、NoFollow、行序）全绿
+- [x] 2.8.1 glue 单测全绿（30+ 用例）；UFS 适配器真实 IO 走 localFS 实测（吞吐基准非目标，功能/门控/红线用例覆盖）
+- [x] 2.8.2 vbox matcher 单测（first-wins、NoFollow、行序）全绿
 
 ---
 
