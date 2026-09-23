@@ -1,0 +1,618 @@
+package fs
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	stdfs "io/fs"
+	"os"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestMemoryFSPathIntrospection(t *testing.T) {
+	t.Parallel()
+	mem := NewMemory()
+	writeTestFile(t, mem, "/data/file.txt", "hello\n")
+
+	statInfo, err := mem.Stat(context.Background(), "/data/file.txt")
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	lstatInfo, err := mem.Lstat(context.Background(), "/data/file.txt")
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if statInfo.Mode() != lstatInfo.Mode() {
+		t.Fatalf("Lstat().Mode() = %v, want %v", lstatInfo.Mode(), statInfo.Mode())
+	}
+
+	realpath, err := mem.Realpath(context.Background(), "/data/../data/file.txt")
+	if err != nil {
+		t.Fatalf("Realpath() error = %v", err)
+	}
+	if got, want := realpath, "/data/file.txt"; got != want {
+		t.Fatalf("Realpath() = %q, want %q", got, want)
+	}
+}
+
+func TestMemoryFSSymlinkIntrospectionAndTraversal(t *testing.T) {
+	t.Parallel()
+	mem := NewMemory()
+	writeTestFile(t, mem, "/safe/target.txt", "hello\n")
+	if err := mem.Symlink(context.Background(), "target.txt", "/safe/link.txt"); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	lstatInfo, err := mem.Lstat(context.Background(), "/safe/link.txt")
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if lstatInfo.Mode()&stdfs.ModeSymlink == 0 {
+		t.Fatalf("Lstat().Mode() = %v, want symlink", lstatInfo.Mode())
+	}
+
+	target, err := mem.Readlink(context.Background(), "/safe/link.txt")
+	if err != nil {
+		t.Fatalf("Readlink() error = %v", err)
+	}
+	if got, want := target, "target.txt"; got != want {
+		t.Fatalf("Readlink() = %q, want %q", got, want)
+	}
+
+	realpath, err := mem.Realpath(context.Background(), "/safe/link.txt")
+	if err != nil {
+		t.Fatalf("Realpath() error = %v", err)
+	}
+	if got, want := realpath, "/safe/target.txt"; got != want {
+		t.Fatalf("Realpath() = %q, want %q", got, want)
+	}
+
+	if got, want := readTestFile(t, mem, "/safe/link.txt"), "hello\n"; got != want {
+		t.Fatalf("Open(link) = %q, want %q", got, want)
+	}
+}
+
+func TestMemoryFSSymlinkLoopFails(t *testing.T) {
+	t.Parallel()
+	mem := NewMemory()
+	if err := mem.Symlink(context.Background(), "b", "/a"); err != nil {
+		t.Fatalf("Symlink(a) error = %v", err)
+	}
+	if err := mem.Symlink(context.Background(), "a", "/b"); err != nil {
+		t.Fatalf("Symlink(b) error = %v", err)
+	}
+
+	_, err := mem.Realpath(context.Background(), "/a")
+	if err == nil {
+		t.Fatal("Realpath() error = nil, want symlink loop error")
+	}
+	if !strings.Contains(err.Error(), "too many levels of symbolic links") {
+		t.Fatalf("Realpath() error = %v, want symlink loop message", err)
+	}
+}
+
+func TestMemoryFSReadlinkRejectsNonSymlink(t *testing.T) {
+	t.Parallel()
+	mem := NewMemory()
+	writeTestFile(t, mem, "/data/file.txt", "hello\n")
+
+	_, err := mem.Readlink(context.Background(), "/data/file.txt")
+	if err == nil {
+		t.Fatal("Readlink() error = nil, want invalid")
+	}
+	if !errors.Is(err, stdfs.ErrInvalid) {
+		t.Fatalf("Readlink() error = %v, want invalid", err)
+	}
+}
+
+func TestMemoryFSChmodPreservesSpecialModeBits(t *testing.T) {
+	t.Parallel()
+	mem := NewMemory()
+	writeTestFile(t, mem, "/data/file.txt", "hello\n")
+
+	if err := mem.Chmod(context.Background(), "/data/file.txt", stdfs.ModeSetuid|stdfs.ModeSetgid|0o755); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+
+	info, err := mem.Stat(context.Background(), "/data/file.txt")
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	want := stdfs.ModeSetuid | stdfs.ModeSetgid | 0o755
+	got := info.Mode() & (stdfs.ModePerm | stdfs.ModeSetuid | stdfs.ModeSetgid | stdfs.ModeSticky)
+	if got != want {
+		t.Fatalf("Mode = %v, want %v", got, want)
+	}
+}
+
+func TestMemoryFSRenameRejectsRoot(t *testing.T) {
+	t.Parallel()
+	mem := NewMemory()
+
+	err := mem.Rename(context.Background(), "/", "/tmp/root")
+	if err == nil {
+		t.Fatal("Rename(/) error = nil, want permission")
+	}
+	if !errors.Is(err, stdfs.ErrPermission) {
+		t.Fatalf("Rename(/) error = %v, want permission", err)
+	}
+
+	info, err := mem.Stat(context.Background(), "/")
+	if err != nil {
+		t.Fatalf("Stat(/) error = %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("Stat(/).IsDir() = false, want true")
+	}
+}
+
+func TestMemoryFSFIFOWriterWaitsForReader(t *testing.T) {
+	t.Parallel()
+
+	mem := NewMemory()
+	if err := mem.MkdirAll(context.Background(), "/tmp", 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := mem.Mkfifo(context.Background(), "/tmp/p", 0o600); err != nil {
+		t.Fatalf("Mkfifo() error = %v", err)
+	}
+
+	writer, err := mem.OpenFile(context.Background(), "/tmp/p", os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile(writer) error = %v", err)
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(writer, "hello")
+		if closeErr := writer.Close(); err == nil {
+			err = closeErr
+		}
+		writeDone <- err
+	}()
+
+	select {
+	case err := <-writeDone:
+		t.Fatalf("writer finished before reader attached: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	reader, err := mem.OpenFile(context.Background(), "/tmp/p", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile(reader) error = %v", err)
+	}
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("reader.Close() error = %v", err)
+		}
+	}()
+
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("writer error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("writer did not unblock after reader attached")
+	}
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if got, want := string(data), "hello"; got != want {
+		t.Fatalf("ReadAll() = %q, want %q", got, want)
+	}
+}
+
+func TestMemoryFSFIFOWriteFailsAfterReaderDisconnect(t *testing.T) {
+	t.Parallel()
+
+	mem := NewMemory()
+	if err := mem.MkdirAll(context.Background(), "/tmp", 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := mem.Mkfifo(context.Background(), "/tmp/p", 0o600); err != nil {
+		t.Fatalf("Mkfifo() error = %v", err)
+	}
+
+	reader, err := mem.OpenFile(context.Background(), "/tmp/p", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile(reader) error = %v", err)
+	}
+	writer, err := mem.OpenFile(context.Background(), "/tmp/p", os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile(writer) error = %v", err)
+	}
+
+	if err := reader.Close(); err != nil {
+		t.Fatalf("reader.Close() error = %v", err)
+	}
+	defer func() {
+		if err := writer.Close(); err != nil {
+			t.Errorf("writer.Close() error = %v", err)
+		}
+	}()
+
+	if _, err := io.WriteString(writer, "hello"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("WriteString() error = %v, want ErrClosedPipe", err)
+	}
+}
+
+func TestOverlayFSReadsFromLowerAndWritesToUpper(t *testing.T) {
+	t.Parallel()
+	lower := seededMemory(t, map[string]string{
+		"/base.txt":       "base\n",
+		"/shared/old.txt": "old\n",
+	})
+	overlay := NewOverlay(lower)
+
+	if got, want := readTestFile(t, overlay, "/base.txt"), "base\n"; got != want {
+		t.Fatalf("overlay read = %q, want %q", got, want)
+	}
+
+	file, err := overlay.OpenFile(context.Background(), "/base.txt", os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := io.WriteString(file, "upper\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if got, want := readTestFile(t, overlay, "/base.txt"), "upper\n"; got != want {
+		t.Fatalf("overlay read after write = %q, want %q", got, want)
+	}
+	if got, want := readTestFile(t, lower, "/base.txt"), "base\n"; got != want {
+		t.Fatalf("lower read after overlay write = %q, want %q", got, want)
+	}
+
+	writeTestFile(t, overlay, "/shared/new.txt", "new\n")
+	if _, err := lower.Stat(context.Background(), "/shared/new.txt"); !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("lower Stat(new.txt) error = %v, want not exist", err)
+	}
+}
+
+func TestOverlayFSReadDirMergesAndHidesDeletedEntries(t *testing.T) {
+	t.Parallel()
+	lower := seededMemory(t, map[string]string{
+		"/dir/lower.txt": "lower\n",
+		"/dir/keep.txt":  "keep\n",
+	})
+	overlay := NewOverlay(lower)
+	writeTestFile(t, overlay, "/dir/upper.txt", "upper\n")
+
+	if err := overlay.Remove(context.Background(), "/dir/lower.txt", false); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+
+	entries, err := overlay.ReadDir(context.Background(), "/dir")
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if got, want := names, []string{"keep.txt", "upper.txt"}; !slices.Equal(got, want) {
+		t.Fatalf("ReadDir() names = %v, want %v", got, want)
+	}
+
+	if got, want := readTestFile(t, lower, "/dir/lower.txt"), "lower\n"; got != want {
+		t.Fatalf("lower file content = %q, want %q", got, want)
+	}
+}
+
+func TestOverlayFSRenameCopiesUpAndTombstonesSource(t *testing.T) {
+	t.Parallel()
+	lower := seededMemory(t, map[string]string{
+		"/dir/file.txt": "move-me\n",
+	})
+	overlay := NewOverlay(lower)
+
+	if err := overlay.Rename(context.Background(), "/dir/file.txt", "/dir/moved.txt"); err != nil {
+		t.Fatalf("Rename() error = %v", err)
+	}
+
+	if got, want := readTestFile(t, overlay, "/dir/moved.txt"), "move-me\n"; got != want {
+		t.Fatalf("overlay moved content = %q, want %q", got, want)
+	}
+	if _, err := overlay.Stat(context.Background(), "/dir/file.txt"); !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("overlay Stat(old) error = %v, want not exist", err)
+	}
+	if got, want := readTestFile(t, lower, "/dir/file.txt"), "move-me\n"; got != want {
+		t.Fatalf("lower original content = %q, want %q", got, want)
+	}
+}
+
+func TestOverlayFSRealpathResolvesLowerSymlinks(t *testing.T) {
+	t.Parallel()
+	lower := seededMemory(t, map[string]string{
+		"/safe/target.txt": "hello\n",
+	})
+	if err := lower.Symlink(context.Background(), "target.txt", "/safe/link.txt"); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	overlay := NewOverlay(lower)
+	realpath, err := overlay.Realpath(context.Background(), "/safe/link.txt")
+	if err != nil {
+		t.Fatalf("Realpath() error = %v", err)
+	}
+	if got, want := realpath, "/safe/target.txt"; got != want {
+		t.Fatalf("Realpath() = %q, want %q", got, want)
+	}
+}
+
+func TestSnapshotFSPreservesSourceViewAndRejectsWrites(t *testing.T) {
+	t.Parallel()
+	source := seededMemory(t, map[string]string{
+		"/data.txt": "before\n",
+	})
+	snapshot, err := NewSnapshot(context.Background(), source)
+	if err != nil {
+		t.Fatalf("NewSnapshot() error = %v", err)
+	}
+
+	writeTestFile(t, source, "/data.txt", "after\n")
+	if got, want := readTestFile(t, snapshot, "/data.txt"), "before\n"; got != want {
+		t.Fatalf("snapshot content = %q, want %q", got, want)
+	}
+
+	if err := snapshot.MkdirAll(context.Background(), "/newdir", 0o755); !errors.Is(err, stdfs.ErrPermission) {
+		t.Fatalf("MkdirAll() error = %v, want permission", err)
+	}
+	if _, err := snapshot.OpenFile(context.Background(), "/data.txt", os.O_WRONLY|os.O_TRUNC, 0o644); !errors.Is(err, stdfs.ErrPermission) {
+		t.Fatalf("OpenFile(write) error = %v, want permission", err)
+	}
+	if realpath, err := snapshot.Realpath(context.Background(), "/data.txt"); err != nil || realpath != "/data.txt" {
+		t.Fatalf("Realpath() = %q, %v; want /data.txt, nil", realpath, err)
+	}
+}
+
+func TestSnapshotFSPreservesSpecialFilesWithoutReadingDeviceStreams(t *testing.T) {
+	t.Parallel()
+
+	source := &specialCloneSourceFS{MemoryFS: NewMemory()}
+	if err := source.seedInitialFiles(InitialFiles{
+		"/dev/zero": {Mode: os.ModeDevice | os.ModeCharDevice | 0o666},
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("seedInitialFiles() error = %v", err)
+	}
+
+	snapshot, err := NewSnapshot(context.Background(), source)
+	if err != nil {
+		t.Fatalf("NewSnapshot() error = %v", err)
+	}
+	if got := source.specialOpenCalls.Load(); got != 0 {
+		t.Fatalf("special device open count = %d, want 0", got)
+	}
+
+	info, err := snapshot.Stat(context.Background(), "/dev/zero")
+	if err != nil {
+		t.Fatalf("Stat(/dev/zero) error = %v", err)
+	}
+	if info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice == 0 {
+		t.Fatalf("Mode(/dev/zero) = %v, want character device bits", info.Mode())
+	}
+}
+
+func TestReusableFactoryReusesBaseAndKeepsSessionsIsolated(t *testing.T) {
+	t.Parallel()
+	var created atomic.Int32
+	factory := Reusable(FactoryFunc(func(context.Context) (FileSystem, error) {
+		created.Add(1)
+		return seededMemory(t, map[string]string{ //nolint:contextcheck // test helper uses background context
+			"/seed.txt": "seed\n",
+		}), nil
+	}))
+
+	first, err := factory.New(context.Background())
+	if err != nil {
+		t.Fatalf("New(first) error = %v", err)
+	}
+	second, err := factory.New(context.Background())
+	if err != nil {
+		t.Fatalf("New(second) error = %v", err)
+	}
+
+	writeTestFile(t, first, "/seed.txt", "first-session\n")
+	writeTestFile(t, first, "/only-first.txt", "first\n")
+
+	if got, want := readTestFile(t, first, "/seed.txt"), "first-session\n"; got != want {
+		t.Fatalf("first /seed.txt = %q, want %q", got, want)
+	}
+	if got, want := readTestFile(t, second, "/seed.txt"), "seed\n"; got != want {
+		t.Fatalf("second /seed.txt = %q, want %q", got, want)
+	}
+	if _, err := second.Stat(context.Background(), "/only-first.txt"); !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("second Stat(/only-first.txt) error = %v, want not exist", err)
+	}
+	if got, want := created.Load(), int32(1); got != want {
+		t.Fatalf("base factory created %d instances, want %d", got, want)
+	}
+}
+
+func TestMemoryFSCloneIsolated(t *testing.T) {
+	t.Parallel()
+	base := seededMemory(t, map[string]string{
+		"/data.txt": "base\n",
+	})
+	clone := base.Clone()
+
+	writeTestFile(t, clone, "/data.txt", "clone\n")
+	writeTestFile(t, clone, "/new.txt", "new\n")
+
+	if got, want := readTestFile(t, clone, "/data.txt"), "clone\n"; got != want {
+		t.Fatalf("clone /data.txt = %q, want %q", got, want)
+	}
+	if got, want := readTestFile(t, base, "/data.txt"), "base\n"; got != want {
+		t.Fatalf("base /data.txt = %q, want %q", got, want)
+	}
+	if _, err := base.Stat(context.Background(), "/new.txt"); !errors.Is(err, stdfs.ErrNotExist) {
+		t.Fatalf("base Stat(/new.txt) error = %v, want not exist", err)
+	}
+}
+
+func TestMutableBackendsStatConcurrentWithWrite(t *testing.T) {
+	t.Parallel()
+
+	t.Run("memory", func(t *testing.T) {
+		t.Parallel()
+		assertStatConcurrentWithWrite(t, NewMemory())
+	})
+
+	t.Run("trie", func(t *testing.T) {
+		t.Parallel()
+		assertStatConcurrentWithWrite(t, NewTrie())
+	})
+}
+
+func assertStatConcurrentWithWrite(t *testing.T, fsys FileSystem) {
+	t.Helper()
+
+	file, err := fsys.OpenFile(context.Background(), "/data.txt", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile(/data.txt) error = %v", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	const iterations = 2048
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for range iterations {
+			if _, err := file.Write([]byte("x")); err != nil {
+				errs <- fmt.Errorf("Write() error: %w", err)
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := range iterations {
+			var (
+				info stdfs.FileInfo
+				err  error
+			)
+			if i%2 == 0 {
+				info, err = fsys.Stat(context.Background(), "/data.txt")
+			} else {
+				info, err = fsys.Lstat(context.Background(), "/data.txt")
+			}
+			if err != nil {
+				errs <- fmt.Errorf("stat-like error: %w", err)
+				return
+			}
+			if info.IsDir() {
+				errs <- fmt.Errorf("stat-like reported directory for regular file")
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got := len(readTestFile(t, fsys, "/data.txt")); got != iterations {
+		t.Fatalf("final size = %d, want %d", got, iterations)
+	}
+}
+
+type specialCloneSourceFS struct {
+	*MemoryFS
+	specialOpenCalls atomic.Int32
+}
+
+func (s *specialCloneSourceFS) Open(ctx context.Context, name string) (File, error) {
+	if Resolve(s.Getwd(), name) == "/dev/zero" {
+		s.specialOpenCalls.Add(1)
+		info, err := s.Stat(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		return specialCloneFile{info: info}, nil
+	}
+	return s.MemoryFS.Open(ctx, name)
+}
+
+type specialCloneFile struct {
+	info stdfs.FileInfo
+}
+
+func (f specialCloneFile) Read([]byte) (int, error) {
+	return 0, errors.New("unexpected special file read")
+}
+func (f specialCloneFile) Write([]byte) (int, error) { return 0, stdfs.ErrPermission }
+func (f specialCloneFile) Close() error              { return nil }
+func (f specialCloneFile) Stat() (stdfs.FileInfo, error) {
+	return f.info, nil
+}
+
+func writeTestFile(t *testing.T, fsys FileSystem, name, contents string) {
+	t.Helper()
+
+	file, err := fsys.OpenFile(context.Background(), name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile(%q) error = %v", name, err)
+	}
+	if _, err := io.WriteString(file, contents); err != nil {
+		t.Fatalf("WriteString(%q) error = %v", name, err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close(%q) error = %v", name, err)
+	}
+}
+
+func readTestFile(t *testing.T, fsys FileSystem, name string) string {
+	t.Helper()
+
+	file, err := fsys.Open(context.Background(), name)
+	if err != nil {
+		t.Fatalf("Open(%q) error = %v", name, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("ReadAll(%q) error = %v", name, err)
+	}
+	return string(data)
+}
+
+func seededMemory(t *testing.T, files map[string]string) *MemoryFS {
+	t.Helper()
+
+	mem := NewMemory()
+	for name, contents := range files {
+		writeTestFile(t, mem, name, contents)
+	}
+	return mem
+}

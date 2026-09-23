@@ -1,0 +1,188 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+
+	"github.com/veypi/vsh"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/responses"
+)
+
+const (
+	exampleModel  = "gpt-4.1-mini"
+	bashToolName  = "bash"
+	examplePrompt = "Use the bash tool to run this exact script: printf 'hello from bash\\n'. " +
+		"After the tool returns, reply with only the raw stdout from the tool."
+)
+
+type bashToolArgs struct {
+	Script string `json:"script"`
+}
+
+type bashToolResult struct {
+	ExitCode int    `json:"exit_code"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+}
+
+func main() {
+	if err := run(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context) error {
+	if os.Getenv("OPENAI_API_KEY") == "" {
+		return errors.New("OPENAI_API_KEY is not set")
+	}
+
+	client := openai.NewClient()
+
+	first, err := client.Responses.New(ctx, initialResponseParams())
+	if err != nil {
+		return fmt.Errorf("create initial response: %w", err)
+	}
+
+	toolCall, err := firstFunctionCall(first)
+	if err != nil {
+		return err
+	}
+
+	toolOutput, err := executeBashTool(ctx, toolCall.Arguments)
+	if err != nil {
+		return fmt.Errorf("execute bash tool: %w", err)
+	}
+
+	second, err := client.Responses.New(ctx, followupResponseParams(first, toolCall, toolOutput))
+	if err != nil {
+		return fmt.Errorf("create follow-up response: %w", err)
+	}
+
+	output := second.OutputText()
+	if output == "" {
+		return errors.New("follow-up response contained no output text")
+	}
+
+	fmt.Print(output)
+	return nil
+}
+
+func initialResponseParams() responses.ResponseNewParams {
+	return responses.ResponseNewParams{
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: openai.String(examplePrompt),
+		},
+		Model: openai.ResponsesModel(exampleModel),
+		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
+			OfFunctionTool: &responses.ToolChoiceFunctionParam{
+				Name: bashToolName,
+			},
+		},
+		Tools: []responses.ToolUnionParam{
+			{
+				OfFunction: &responses.FunctionToolParam{
+					Name:        bashToolName,
+					Description: openai.String("Run a bash script and return its exit code, stdout, and stderr."),
+					Parameters: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"script": map[string]any{
+								"type":        "string",
+								"description": "The bash script to run.",
+							},
+						},
+						"required":             []string{"script"},
+						"additionalProperties": false,
+					},
+					Strict: openai.Bool(true),
+				},
+			},
+		},
+	}
+}
+
+func followupResponseParams(first *responses.Response, toolCall *responses.ResponseFunctionToolCall, output string) responses.ResponseNewParams {
+	return responses.ResponseNewParams{
+		Input: responses.ResponseNewParamsInputUnion{
+			OfInputItemList: buildFollowupInput(first, toolCall, output),
+		},
+		Model: openai.ResponsesModel(exampleModel),
+	}
+}
+
+func firstFunctionCall(response *responses.Response) (*responses.ResponseFunctionToolCall, error) {
+	if response == nil {
+		return nil, errors.New("response was nil")
+	}
+	for i := range response.Output {
+		if response.Output[i].Type != "function_call" || response.Output[i].Name != bashToolName {
+			continue
+		}
+		call := response.Output[i].AsFunctionCall()
+		return &call, nil
+	}
+	return nil, fmt.Errorf("response did not contain a %q tool call", bashToolName)
+}
+
+func buildFollowupInput(first *responses.Response, toolCall *responses.ResponseFunctionToolCall, output string) responses.ResponseInputParam {
+	input := responses.ResponseInputParam{
+		responses.ResponseInputItemParamOfMessage(examplePrompt, responses.EasyInputMessageRoleUser),
+	}
+
+	if first != nil {
+		for i := range first.Output {
+			switch first.Output[i].Type {
+			case "reasoning":
+				reasoning := first.Output[i].AsReasoning()
+				reasoningParam := reasoning.ToParam()
+				input = append(input, responses.ResponseInputItemUnionParam{
+					OfReasoning: &reasoningParam,
+				})
+			case "function_call":
+				call := first.Output[i].AsFunctionCall()
+				input = append(input, responses.ResponseInputItemParamOfFunctionCall(call.Arguments, call.CallID, call.Name))
+			}
+		}
+	}
+
+	input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(toolCall.CallID, output))
+	return input
+}
+
+func executeBashTool(ctx context.Context, arguments string) (string, error) {
+	var args bashToolArgs
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return "", fmt.Errorf("decode tool arguments: %w", err)
+	}
+	if args.Script == "" {
+		return "", errors.New("bash tool call did not include a script")
+	}
+
+	gb, err := vsh.New() //nolint:contextcheck // constructor does not accept context
+	if err != nil {
+		return "", fmt.Errorf("create runtime: %w", err)
+	}
+
+	result, err := gb.Run(ctx, &vsh.ExecutionRequest{
+		Script: args.Script,
+	})
+	if err != nil {
+		return "", fmt.Errorf("run script: %w", err)
+	}
+
+	payload, err := json.Marshal(bashToolResult{
+		ExitCode: result.ExitCode,
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode tool output: %w", err)
+	}
+
+	return string(payload), nil
+}

@@ -1,0 +1,48 @@
+package cli
+
+import (
+	"io"
+	"strings"
+
+	"github.com/veypi/vsh"
+)
+
+// Config controls how [Run] presents and configures the shared vsh CLI
+// frontend.
+type Config struct {
+	// Name is the binary name shown in help text, version output, and runtime
+	// error messages.
+	Name string
+
+	// Build contains the embedded build metadata shown by --version.
+	Build *BuildInfo
+
+	// BaseOptions are always applied when constructing the vsh runtime before
+	// any CLI filesystem flags are interpreted.
+	BaseOptions []vsh.Option
+
+	// TTYDetector overrides how stdin terminal detection is performed. When nil,
+	// [Run] uses the default os.File-based detector.
+	TTYDetector func(io.Reader) bool
+
+	// SystemTempRoots resolves trusted host temp roots used to validate
+	// --readwrite-root. This is primarily useful for tests and host launchers
+	// that already know the canonical temp root outside the sandbox.
+	SystemTempRoots func() []string
+}
+
+// BuildInfo describes the build metadata rendered by --version.
+type BuildInfo struct {
+	Version string
+	Commit  string
+	Date    string
+	BuiltBy string
+}
+
+func normalizeConfig(cfg Config) Config {
+	cfg.Name = strings.TrimSpace(cfg.Name)
+	if cfg.Name == "" {
+		cfg.Name = "vsh"
+	}
+	return cfg
+}

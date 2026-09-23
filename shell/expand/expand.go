@@ -1,0 +1,3374 @@
+// Copyright (c) 2017, Daniel Martí <mvdan@mvdan.cc>
+// See LICENSE for licensing information
+
+package expand
+
+import (
+	"cmp"
+	"container/heap"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"iter"
+	"os"
+	"path"
+	"regexp"
+	"runtime"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/veypi/vsh/shell/internal/pattern"
+	"github.com/veypi/vsh/shell/syntax"
+	"golang.org/x/text/collate"
+	"golang.org/x/text/language"
+)
+
+// A Config specifies details about how shell expansion should be performed. The
+// zero value is a valid configuration.
+type Config struct {
+	// Env is used to get and set environment variables when performing
+	// shell expansions. Some special parameters are also expanded via this
+	// interface, such as:
+	//
+	//   * "#", "@", "*", "0"-"9" for the shell's parameters
+	//   * "?", "$", "PPID" for the shell's status and process
+	//   * "HOME foo" to retrieve user foo's home directory
+	//
+	// If nil, there are no environment variables set. Use
+	// ListEnviron(os.Environ()...) to use the system's environment
+	// variables.
+	Env Environ
+
+	// Runtime lets internal shell runtimes provide callbacks without
+	// allocating a fresh closure set per Config instance.
+	Runtime RuntimeCallbacks
+
+	// PlatformOS is the logical OS semantics this config should follow for
+	// platform-sensitive expansion behavior. When empty, expansion falls back
+	// to the current build host's runtime.GOOS.
+	PlatformOS string
+
+	// StartupHome carries the shell's trusted startup home for callers that
+	// need startup-sensitive tilde semantics.
+	StartupHome string
+
+	// LangVariant controls shell-variant-sensitive reparsing and quoting
+	// helpers used during expansion. The zero value behaves like Bash.
+	LangVariant syntax.LangVariant
+
+	// TildeEnv is used for ~ and ~user lookup. If nil, Env is used.
+	TildeEnv Environ
+	// PreferStartupHomeForArgTilde makes ordinary argv tilde expansion
+	// (e.g. `echo ~`) prefer StartupHome over the live HOME variable for the
+	// current user.
+	PreferStartupHomeForArgTilde bool
+	// PreferStartupHomeForAssignmentTilde makes assignment-like tilde
+	// expansion (e.g. `~:~/src`) prefer StartupHome over the live HOME
+	// variable for the current user.
+	PreferStartupHomeForAssignmentTilde bool
+	// CmdSubst expands a command substitution node, writing its standard
+	// output to the provided [io.Writer].
+	//
+	// If nil, encountering a command substitution will result in an
+	// UnexpectedCommandError.
+	CmdSubst func(io.Writer, *syntax.CmdSubst) error
+
+	// ProcSubst expands a process substitution node.
+	ProcSubst func(*syntax.ProcSubst) (string, error)
+
+	// ReportError is used for non-fatal expansion diagnostics where bash emits
+	// stderr but still yields an empty string or zero value.
+	ReportError func(error)
+
+	// ReadDir is used for file path globbing.
+	// If nil, globbing is disabled.
+	ReadDir func(string) ([]fs.DirEntry, error)
+	// ReadDirEnabled allows Runtime-backed configs to enable globbing
+	// without populating ReadDir directly.
+	ReadDirEnabled bool
+
+	// GlobStar corresponds to the shell option which allows globbing with "**".
+	GlobStar bool
+
+	// DotGlob corresponds to the shell option which allows filenames beginning
+	// with a dot to be matched by a pattern which does not begin with a dot.
+	DotGlob bool
+
+	// NoCaseGlob corresponds to the shell option which causes case-insensitive
+	// pattern matching in pathname expansion.
+	NoCaseGlob bool
+
+	// NullGlob corresponds to the shell option which allows globbing
+	// patterns which match nothing to result in zero fields.
+	NullGlob bool
+
+	// FailGlob corresponds to the shell option which treats pathname
+	// expansion patterns which match nothing as errors.
+	FailGlob bool
+
+	// GlobSkipDots corresponds to the shell option which prevents pathname
+	// expansion from matching "." and ".." unless disabled.
+	GlobSkipDots bool
+
+	// NoUnset corresponds to the shell option which treats unset variables
+	// as errors.
+	NoUnset bool
+
+	// NoBraceExpand corresponds to set +B; when true, brace expansion
+	// (e.g. {a,b,c}, {1..5}) is suppressed.
+	NoBraceExpand bool
+
+	// ExtGlob corresponds to the shell option which allows using extended
+	// pattern matching features when performing pathname expansion (globbing).
+	ExtGlob bool
+
+	globIgnore         []string
+	globIgnoreMatchers []func(string) bool
+	globCollatorLocale string
+	globCollatorValue  *collate.Collator
+	globCollatorCached bool
+	globPartsCacheKey  globPartsCacheKey
+	globPartsCache     []globPart
+	globPartsHaveStar  bool
+	globPartsCached    bool
+
+	bufferAlloc strings.Builder
+	fieldAlloc  [4]fieldPart
+	fieldsAlloc [4][]fieldPart
+
+	ifs string
+	// A pointer to a parameter expansion node, if we're inside one.
+	// Necessary for ${LINENO}.
+	curParam *syntax.ParamExp
+
+	// CurrentLine overrides the line number reported by special parameters such
+	// as LINENO when expansion should be anchored to the containing statement
+	// rather than the current token.
+	CurrentLine func() uint
+
+	paramPatternExprCache     *boundedFIFOCache[paramPatternExprCacheKey, string]
+	compiledParamPatternCache *boundedFIFOCache[compiledParamPatternCacheKey, *compiledParamPattern]
+	reportedParamErrors       map[*syntax.ParamExp]map[string]struct{}
+}
+
+// RuntimeCallbacks lets an internal shell runtime provide expansion helpers
+// without allocating per-Config closures. External callers can keep using the
+// function fields directly.
+type RuntimeCallbacks interface {
+	ExpandCurrentLine() uint
+	ExpandReportError(error)
+	ExpandCmdSubst(io.Writer, *syntax.CmdSubst) error
+	ExpandProcSubst(*syntax.ProcSubst) (string, error)
+	ExpandReadDir(string) ([]fs.DirEntry, error)
+}
+
+const paramPatternCacheSize = 128
+
+type paramPatternExprCacheKey struct {
+	pattern    string
+	mode       pattern.Mode
+	byteLocale bool
+}
+
+type compiledParamPatternCacheKey struct {
+	expr       string
+	byteLocale bool
+}
+
+type boundedFIFOCache[K comparable, V any] struct {
+	limit   int
+	entries []boundedFIFOCacheEntry[K, V]
+}
+
+type boundedFIFOCacheEntry[K comparable, V any] struct {
+	key   K
+	value V
+}
+
+func newBoundedFIFOCache[K comparable, V any](limit int) *boundedFIFOCache[K, V] {
+	return &boundedFIFOCache[K, V]{
+		limit:   limit,
+		entries: make([]boundedFIFOCacheEntry[K, V], 0, limit),
+	}
+}
+
+func (c *boundedFIFOCache[K, V]) get(key K) (V, bool) {
+	for i := len(c.entries) - 1; i >= 0; i-- {
+		if c.entries[i].key == key {
+			return c.entries[i].value, true
+		}
+	}
+	var zero V
+	return zero, false
+}
+
+func (c *boundedFIFOCache[K, V]) set(key K, value V) {
+	if c.limit <= 0 {
+		return
+	}
+	for i := range c.entries {
+		if c.entries[i].key == key {
+			c.entries[i].value = value
+			return
+		}
+	}
+	if len(c.entries) == c.limit {
+		copy(c.entries, c.entries[1:])
+		c.entries = c.entries[:c.limit-1]
+	}
+	c.entries = append(c.entries, boundedFIFOCacheEntry[K, V]{
+		key:   key,
+		value: value,
+	})
+}
+
+// UnexpectedCommandError is returned if a command substitution is encountered
+// when [Config.CmdSubst] is nil.
+type UnexpectedCommandError struct {
+	Node *syntax.CmdSubst
+}
+
+func (u UnexpectedCommandError) Error() string {
+	return fmt.Sprintf("unexpected command substitution at %s", u.Node.Pos())
+}
+
+type FailGlobError struct {
+	Pattern string
+}
+
+func (e FailGlobError) Error() string {
+	return fmt.Sprintf("no match: %s", e.Pattern)
+}
+
+func prepareConfig(cfg *Config) *Config {
+	if cfg == nil {
+		cfg = &Config{}
+	}
+	cfg.Env = cmp.Or(cfg.Env, FuncEnviron(func(string) string { return "" }))
+	cfg.TildeEnv = cmp.Or(cfg.TildeEnv, cfg.Env)
+
+	cfg.ifs = " \t\n"
+	if vr := cfg.Env.Get("IFS"); vr.IsSet() {
+		cfg.ifs = vr.String()
+	}
+	if cfg.reportedParamErrors == nil {
+		cfg.reportedParamErrors = make(map[*syntax.ParamExp]map[string]struct{})
+	}
+	cfg.prepareGlobIgnore()
+
+	return cfg
+}
+
+// ResetRuntimeState clears per-run Config state while preserving reusable
+// caches and scratch buffers.
+func (cfg *Config) ResetRuntimeState() {
+	cfg.Env = nil
+	cfg.Runtime = nil
+	cfg.PlatformOS = ""
+	cfg.StartupHome = ""
+	cfg.LangVariant = 0
+	cfg.TildeEnv = nil
+	cfg.PreferStartupHomeForArgTilde = false
+	cfg.PreferStartupHomeForAssignmentTilde = false
+	cfg.CmdSubst = nil
+	cfg.ProcSubst = nil
+	cfg.ReportError = nil
+	cfg.ReadDir = nil
+	cfg.ReadDirEnabled = false
+	cfg.GlobStar = false
+	cfg.DotGlob = false
+	cfg.NoCaseGlob = false
+	cfg.NullGlob = false
+	cfg.FailGlob = false
+	cfg.GlobSkipDots = false
+	cfg.NoUnset = false
+	cfg.NoBraceExpand = false
+	cfg.ExtGlob = false
+	cfg.globIgnore = nil
+	cfg.globIgnoreMatchers = nil
+	cfg.globCollatorLocale = ""
+	cfg.globCollatorValue = nil
+	cfg.globCollatorCached = false
+	cfg.bufferAlloc.Reset()
+	cfg.ifs = ""
+	cfg.curParam = nil
+	if cfg.reportedParamErrors != nil {
+		clear(cfg.reportedParamErrors)
+	}
+}
+
+func (cfg *Config) prepareParamPatternExprCache() {
+	if cfg.paramPatternExprCache == nil {
+		cfg.paramPatternExprCache = newBoundedFIFOCache[paramPatternExprCacheKey, string](paramPatternCacheSize)
+	}
+}
+
+func (cfg *Config) prepareCompiledParamPatternCache() {
+	if cfg.compiledParamPatternCache == nil {
+		cfg.compiledParamPatternCache = newBoundedFIFOCache[compiledParamPatternCacheKey, *compiledParamPattern](paramPatternCacheSize)
+	}
+}
+
+func (cfg *Config) currentLine() uint {
+	switch {
+	case cfg.CurrentLine != nil:
+		return cfg.CurrentLine()
+	case cfg.Runtime != nil:
+		return cfg.Runtime.ExpandCurrentLine()
+	default:
+		return 0
+	}
+}
+
+func (cfg *Config) reportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case cfg.ReportError != nil:
+		cfg.ReportError(err)
+	case cfg.Runtime != nil:
+		cfg.Runtime.ExpandReportError(err)
+	default:
+		return false
+	}
+	return true
+}
+
+func (cfg *Config) runCmdSubst(w io.Writer, cs *syntax.CmdSubst) error {
+	switch {
+	case cfg.CmdSubst != nil:
+		return cfg.CmdSubst(w, cs)
+	case cfg.Runtime != nil:
+		return cfg.Runtime.ExpandCmdSubst(w, cs)
+	default:
+		return UnexpectedCommandError{Node: cs}
+	}
+}
+
+func (cfg *Config) runProcSubst(ps *syntax.ProcSubst) (string, error) {
+	switch {
+	case cfg.ProcSubst != nil:
+		return cfg.ProcSubst(ps)
+	case cfg.Runtime != nil:
+		return cfg.Runtime.ExpandProcSubst(ps)
+	default:
+		return "", fmt.Errorf("unexpected process substitution at %s", ps.Pos())
+	}
+}
+
+func (cfg *Config) canReadDir() bool {
+	return cfg.ReadDir != nil || (cfg.Runtime != nil && cfg.ReadDirEnabled)
+}
+
+func (cfg *Config) readDir(name string) ([]fs.DirEntry, error) {
+	switch {
+	case cfg.ReadDir != nil:
+		return cfg.ReadDir(name)
+	case cfg.Runtime != nil && cfg.ReadDirEnabled:
+		return cfg.Runtime.ExpandReadDir(name)
+	default:
+		return nil, fs.ErrInvalid
+	}
+}
+
+func (cfg *Config) swallowNonFatal(err error) bool {
+	if err == nil {
+		return false
+	}
+	if !isBadArraySubscript(err) {
+		var circular CircularNameRefError
+		if !errors.As(err, &circular) {
+			return false
+		}
+	}
+	if cfg.ReportError == nil && cfg.Runtime == nil {
+		return false
+	}
+	return cfg.reportError(err)
+}
+
+func (cfg *Config) reportParamErrorOnce(pe *syntax.ParamExp, err error) {
+	if (cfg.ReportError == nil && cfg.Runtime == nil) || pe == nil || err == nil {
+		return
+	}
+	key := err.Error()
+	seen := cfg.reportedParamErrors[pe]
+	if seen == nil {
+		seen = make(map[string]struct{})
+		cfg.reportedParamErrors[pe] = seen
+	}
+	if _, ok := seen[key]; ok {
+		return
+	}
+	seen[key] = struct{}{}
+	cfg.reportError(err)
+}
+
+func (cfg *Config) reportNegativeSubstringLength(pe *syntax.ParamExp, length int) {
+	cfg.reportParamErrorOnce(pe, fmt.Errorf(" %d: substring expression < 0", length))
+}
+
+func (cfg *Config) ifsRune(r rune) bool {
+	for _, r2 := range cfg.ifs {
+		if r == r2 {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg *Config) ifsWhitespaceRune(r rune) bool {
+	if !cfg.ifsRune(r) {
+		return false
+	}
+	return r == ' ' || r == '\t' || r == '\n'
+}
+
+type ifsRuneType uint8
+
+const (
+	ifsRuneNone ifsRuneType = iota
+	ifsRuneWhitespace
+	ifsRuneNonWhitespace
+)
+
+func (cfg *Config) classifyIFSRune(r rune) ifsRuneType {
+	switch {
+	case cfg.ifsWhitespaceRune(r):
+		return ifsRuneWhitespace
+	case cfg.ifsRune(r):
+		return ifsRuneNonWhitespace
+	default:
+		return ifsRuneNone
+	}
+}
+
+func (cfg *Config) ifsByte(b byte) bool {
+	return strings.IndexByte(cfg.ifs, b) >= 0
+}
+
+func (cfg *Config) classifyIFSByte(b byte) ifsRuneType {
+	switch {
+	case cfg.ifsByte(b) && (b == ' ' || b == '\t' || b == '\n'):
+		return ifsRuneWhitespace
+	case cfg.ifsByte(b):
+		return ifsRuneNonWhitespace
+	default:
+		return ifsRuneNone
+	}
+}
+
+func (cfg *Config) classifyIFSStringAt(s string, start int) (ifsRuneType, int) {
+	if start >= len(s) {
+		return ifsRuneNone, 0
+	}
+	r, width := utf8.DecodeRuneInString(s[start:])
+	if r == utf8.RuneError && width == 1 {
+		return cfg.classifyIFSByte(s[start]), 1
+	}
+	return cfg.classifyIFSRune(r), width
+}
+
+func (cfg *Config) stringHasIFS(s string) bool {
+	for i := 0; i < len(s); {
+		rType, width := cfg.classifyIFSStringAt(s, i)
+		if rType != ifsRuneNone {
+			return true
+		}
+		i += width
+	}
+	return false
+}
+
+func (cfg *Config) ifsJoin(strs []string) string {
+	sep := ""
+	if cfg.ifs != "" {
+		sep = cfg.ifs[:1]
+	}
+	return strings.Join(strs, sep)
+}
+
+func (cfg *Config) strBuilder() *strings.Builder {
+	b := &cfg.bufferAlloc
+	b.Reset()
+	return b
+}
+
+func (cfg *Config) envGet(name string) string {
+	return cfg.Env.Get(name).String()
+}
+
+func (cfg *Config) envSet(name, value string) error {
+	wenv, ok := cfg.Env.(WriteEnviron)
+	if !ok {
+		return fmt.Errorf("environment is read-only")
+	}
+	return wenv.Set(name, Variable{Set: true, Kind: String, Str: value})
+}
+
+func parseGlobIgnore(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var (
+		parts   []string
+		current strings.Builder
+		inClass bool
+		escaped bool
+	)
+	for i := 0; i < len(raw); i++ {
+		b := raw[i]
+		if escaped {
+			current.WriteByte(b)
+			escaped = false
+			continue
+		}
+		switch b {
+		case '\\':
+			current.WriteByte(b)
+			escaped = true
+		case '[':
+			current.WriteByte(b)
+			inClass = true
+		case ']':
+			current.WriteByte(b)
+			inClass = false
+		case ':':
+			if inClass {
+				current.WriteByte(b)
+				continue
+			}
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(b)
+		}
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
+}
+
+func (cfg *Config) prepareGlobIgnore() {
+	cfg.globIgnore = parseGlobIgnore(cfg.envGet("GLOBIGNORE"))
+	if len(cfg.globIgnore) == 0 {
+		cfg.globIgnoreMatchers = nil
+		return
+	}
+	mode := pattern.Filenames | pattern.EntireString | pattern.GlobLeadingDot
+	if cfg.NoCaseGlob {
+		mode |= pattern.NoGlobCase
+	}
+	if cfg.ExtGlob {
+		mode |= pattern.ExtendedOperators
+	}
+	matchers := make([]func(string) bool, 0, len(cfg.globIgnore))
+	for _, pat := range cfg.globIgnore {
+		matcher, err := pattern.ExtendedPatternMatcher(pat, mode)
+		if err != nil {
+			literal := pat
+			matcher = func(name string) bool {
+				return name == literal
+			}
+		}
+		matchers = append(matchers, matcher)
+	}
+	cfg.globIgnoreMatchers = matchers
+}
+
+func (cfg *Config) globLeadingDot() bool {
+	return cfg.DotGlob || len(cfg.globIgnore) > 0
+}
+
+func (cfg *Config) includeDotDotCandidates() bool {
+	return !cfg.GlobSkipDots && len(cfg.globIgnore) == 0
+}
+
+func (cfg *Config) usesCLocale() bool {
+	for _, name := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		switch cfg.envGet(name) {
+		case "":
+			continue
+		case "C", "POSIX":
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// Literal expands a single shell word. It is similar to [Fields], but the result
+// is a single string. This is the behavior when a word is used as the value in
+// a shell variable assignment, for example.
+//
+// The config specifies shell expansion options; nil behaves the same as an
+// empty config.
+func Literal(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, quoteNone)
+	if err != nil {
+		return "", err
+	}
+	return cfg.fieldJoin(field), nil
+}
+
+// LiteralNoTilde expands a single shell word like [Literal], but leaves a
+// leading bare `~` untouched.
+func LiteralNoTilde(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, quoteNoTilde)
+	if err != nil {
+		return "", err
+	}
+	return cfg.fieldJoin(field), nil
+}
+
+// AssignmentLiteral expands a single shell word using assignment-value
+// semantics. It matches [Literal] except that backslashes in unquoted literal
+// text consume the following byte, as they do in shell assignments.
+func AssignmentLiteral(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, quoteAssign)
+	if err != nil {
+		return "", err
+	}
+	return cfg.fieldJoin(field), nil
+}
+
+// AssignmentWordLiteral expands a single shell word using assignment-word
+// backslash rules without applying assignment-style tilde expansion.
+func AssignmentWordLiteral(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, quoteAssignNoTilde)
+	if err != nil {
+		return "", err
+	}
+	return cfg.fieldJoin(field), nil
+}
+
+func assignmentLikeWordPrefix(s string) (prefix, value string, ok bool) {
+	eq := strings.IndexByte(s, '=')
+	if eq <= 0 {
+		return "", "", false
+	}
+	name := s[:eq]
+	if strings.HasSuffix(name, "+") {
+		name = name[:len(name)-1]
+	}
+	if !syntax.ValidName(name) {
+		return "", "", false
+	}
+	return s[:eq+1], s[eq+1:], true
+}
+
+func (cfg *Config) expandAssignmentTildeLiteral(s string, hasMoreParts bool, allowLeading bool) string {
+	if !strings.ContainsRune(s, '~') {
+		return s
+	}
+	var b strings.Builder
+	start := 0
+	firstSegment := true
+	for i := 0; i <= len(s); i++ {
+		if i < len(s) {
+			if s[i] != ':' || assignmentTildeColonEscaped(s, i) {
+				continue
+			}
+		}
+		segment := s[start:i]
+		segmentMoreFields := hasMoreParts && i == len(s)
+		if (allowLeading && firstSegment) || !firstSegment {
+			if prefix, suffix, expanded := cfg.expandAssignmentUser(segment, segmentMoreFields); expanded {
+				b.WriteString(prefix)
+				b.WriteString(suffix)
+			} else {
+				b.WriteString(segment)
+			}
+		} else {
+			b.WriteString(segment)
+		}
+		if i == len(s) {
+			break
+		}
+		b.WriteByte(':')
+		start = i + 1
+		firstSegment = false
+	}
+	return b.String()
+}
+
+func assignmentTildeColonEscaped(s string, colon int) bool {
+	backslashes := 0
+	for i := colon - 1; i >= 0 && s[i] == '\\'; i-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
+}
+
+// Document expands a single shell word as if it were a here-document body.
+// It is similar to [Literal], but without brace expansion, tilde expansion, and
+// globbing.
+//
+// The config specifies shell expansion options; nil behaves the same as an
+// empty config.
+func Document(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, quoteHeredoc)
+	if err != nil {
+		return "", err
+	}
+	return cfg.fieldJoin(field), nil
+}
+
+// Pattern expands a shell pattern AST. Quoted parts are escaped via
+// [pattern.QuoteMeta], while pattern operators such as `*`, `?`, bracket
+// expressions, and extended globs are preserved. The result can be used on
+// [pattern.Regexp] directly.
+//
+// The config specifies shell expansion options; nil behaves the same as an
+// empty config.
+func Pattern(cfg *Config, pat *syntax.Pattern) (string, error) {
+	if pat == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	return cfg.patternString(pat, true)
+}
+
+// PatternNoTilde expands a pattern AST like [Pattern], but leaves a leading
+// bare `~` untouched.
+func PatternNoTilde(cfg *Config, pat *syntax.Pattern) (string, error) {
+	if pat == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	return cfg.patternString(pat, false)
+}
+
+// PatternWord expands a single shell word as a pattern. It is retained for
+// classic test/[ operands, which still parse as generic words rather than the
+// first-class pattern AST.
+func PatternWord(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, quoteNone)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	for _, part := range field {
+		if part.quote > quoteNone {
+			sb.WriteString(pattern.QuoteMeta(part.val, pattern.ExtendedOperators))
+		} else {
+			sb.WriteString(part.val)
+		}
+	}
+	return sb.String(), nil
+}
+
+func (cfg *Config) patternString(pat *syntax.Pattern, allowLeadingTilde bool) (string, error) {
+	if pat == nil {
+		return "", nil
+	}
+	var sb strings.Builder
+	for i, part := range pat.Parts {
+		leading := allowLeadingTilde && i == 0
+		if err := cfg.appendPatternPart(&sb, part, leading, i+1 < len(pat.Parts)); err != nil {
+			return "", err
+		}
+	}
+	return sb.String(), nil
+}
+
+func (cfg *Config) patternLiteralString(pat *syntax.Pattern) (string, error) {
+	if pat == nil {
+		return "", nil
+	}
+	var sb strings.Builder
+	for _, part := range pat.Parts {
+		if err := cfg.appendPatternLiteralPart(&sb, part); err != nil {
+			return "", err
+		}
+	}
+	return sb.String(), nil
+}
+
+func (cfg *Config) appendPatternPart(sb *strings.Builder, part syntax.PatternPart, leading, more bool) error {
+	switch part := part.(type) {
+	case *syntax.PatternAny:
+		sb.WriteByte('*')
+	case *syntax.PatternSingle:
+		sb.WriteByte('?')
+	case *syntax.PatternCharClass:
+		sb.WriteString(part.Value)
+	case *syntax.PatternGroup:
+		s, err := cfg.patternGroupString(part)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(s)
+	case *syntax.Lit:
+		s := part.Value
+		if leading {
+			if prefix, rest, expanded := cfg.expandUser(s, more); expanded {
+				s = prefix + rest
+			}
+		}
+		s, _, _ = strings.Cut(s, "\x00")
+		sb.WriteString(s)
+	case *syntax.SglQuoted:
+		s := part.Value
+		if part.Dollar {
+			s = cfg.decodeANSICString(s)
+			s, _, _ = strings.Cut(s, "\x00")
+		}
+		sb.WriteString(pattern.QuoteMeta(s, pattern.ExtendedOperators))
+	case *syntax.DblQuoted:
+		field, err := cfg.wordField(part.Parts, quoteDouble)
+		if err != nil {
+			return err
+		}
+		for _, fp := range field {
+			sb.WriteString(pattern.QuoteMeta(fp.val, pattern.ExtendedOperators))
+		}
+	case *syntax.ParamExp:
+		if parts, ok, err := cfg.paramExpWordField(part, quoteNone); err != nil {
+			return err
+		} else if ok {
+			for _, fp := range parts {
+				if fp.quote > quoteNone {
+					sb.WriteString(pattern.QuoteMeta(fp.val, pattern.ExtendedOperators))
+				} else {
+					sb.WriteString(fp.val)
+				}
+			}
+		} else {
+			val, err := cfg.paramExp(part, quoteNone)
+			if err != nil {
+				return err
+			}
+			sb.WriteString(val)
+		}
+	case *syntax.CmdSubst:
+		val, err := cfg.cmdSubst(part)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(val)
+	case *syntax.ArithmExp:
+		n, err := Arithm(cfg, part.X)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(strconv.Itoa(n))
+	case *syntax.ProcSubst:
+		procPath, err := cfg.runProcSubst(part)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(procPath)
+	case *syntax.ExtGlob:
+		s, err := cfg.extGlobPatternString(part)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(s)
+	default:
+		panic(fmt.Sprintf("unhandled pattern part: %T", part))
+	}
+	return nil
+}
+
+func (cfg *Config) appendPatternLiteralPart(sb *strings.Builder, part syntax.PatternPart) error {
+	switch part := part.(type) {
+	case *syntax.PatternAny:
+		sb.WriteByte('*')
+	case *syntax.PatternSingle:
+		sb.WriteByte('?')
+	case *syntax.PatternCharClass:
+		sb.WriteString(part.Value)
+	case *syntax.PatternGroup:
+		s, err := cfg.patternGroupLiteralString(part)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(s)
+	case *syntax.Lit:
+		s := part.Value
+		s, _, _ = strings.Cut(s, "\x00")
+		sb.WriteString(s)
+	case *syntax.SglQuoted:
+		s := part.Value
+		if part.Dollar {
+			s = cfg.decodeANSICString(s)
+			s, _, _ = strings.Cut(s, "\x00")
+		}
+		sb.WriteString(s)
+	case *syntax.DblQuoted:
+		field, err := cfg.wordField(part.Parts, quoteDouble)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(cfg.fieldJoin(field))
+	case *syntax.ParamExp:
+		if parts, ok, err := cfg.paramExpWordField(part, quoteNone); err != nil {
+			return err
+		} else if ok {
+			sb.WriteString(cfg.fieldJoin(parts))
+		} else {
+			val, err := cfg.paramExp(part, quoteNone)
+			if err != nil {
+				return err
+			}
+			sb.WriteString(val)
+		}
+	case *syntax.CmdSubst:
+		val, err := cfg.cmdSubst(part)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(val)
+	case *syntax.ArithmExp:
+		n, err := Arithm(cfg, part.X)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(strconv.Itoa(n))
+	case *syntax.ProcSubst:
+		procPath, err := cfg.runProcSubst(part)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(procPath)
+	case *syntax.ExtGlob:
+		s, err := cfg.extGlobLiteralString(part)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(s)
+	default:
+		panic(fmt.Sprintf("unhandled pattern literal part: %T", part))
+	}
+	return nil
+}
+
+func (cfg *Config) extGlobPatternString(eg *syntax.ExtGlob) (string, error) {
+	var sb strings.Builder
+	sb.WriteString(eg.Op.String())
+	for i, pat := range eg.Patterns {
+		if i > 0 {
+			sb.WriteByte('|')
+		}
+		str, err := cfg.patternString(pat, false)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(str)
+	}
+	sb.WriteByte(')')
+	return sb.String(), nil
+}
+
+func (cfg *Config) patternGroupString(group *syntax.PatternGroup) (string, error) {
+	var sb strings.Builder
+	sb.WriteByte('(')
+	for i, pat := range group.Patterns {
+		if i > 0 {
+			sb.WriteByte('|')
+		}
+		str, err := cfg.patternString(pat, false)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(str)
+	}
+	sb.WriteByte(')')
+	return sb.String(), nil
+}
+
+func (cfg *Config) extGlobLiteralString(eg *syntax.ExtGlob) (string, error) {
+	var sb strings.Builder
+	sb.WriteString(eg.Op.String())
+	for i, pat := range eg.Patterns {
+		if i > 0 {
+			sb.WriteByte('|')
+		}
+		str, err := cfg.patternLiteralString(pat)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(str)
+	}
+	sb.WriteByte(')')
+	return sb.String(), nil
+}
+
+func (cfg *Config) patternGroupLiteralString(group *syntax.PatternGroup) (string, error) {
+	var sb strings.Builder
+	sb.WriteByte('(')
+	for i, pat := range group.Patterns {
+		if i > 0 {
+			sb.WriteByte('|')
+		}
+		str, err := cfg.patternLiteralString(pat)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(str)
+	}
+	sb.WriteByte(')')
+	return sb.String(), nil
+}
+
+func regexpWord(cfg *Config, word *syntax.Word, ql quoteLevel) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, ql)
+	if err != nil {
+		return "", err
+	}
+	sb := cfg.strBuilder()
+	for _, part := range field {
+		if part.quote > quoteNone {
+			sb.WriteString(regexp.QuoteMeta(part.val))
+		} else {
+			sb.WriteString(part.val)
+		}
+	}
+	return sb.String(), nil
+}
+
+// Regexp expands a single shell word for use as a Bash [[ =~ ]] regular
+// expression, preserving regex semantics in unquoted parts while treating
+// quoted parts as literals.
+func Regexp(cfg *Config, word *syntax.Word) (string, error) {
+	return regexpWord(cfg, word, quoteRegexp)
+}
+
+// RegexpNoTilde expands a single shell word like [Regexp], but leaves a
+// leading bare `~` untouched.
+func RegexpNoTilde(cfg *Config, word *syntax.Word) (string, error) {
+	return regexpWord(cfg, word, quoteRegexpNoTilde)
+}
+
+// Format expands a format string with a number of arguments, following the
+// shell's format specifications. These include printf(1), among others.
+//
+// The resulting string is returned, along with the number of arguments used.
+// Note that the resulting string may contain null bytes, for example
+// if the format string used `\x00`. The caller should terminate the string
+// at the first null byte if needed, such as when expanding for `$'foo\x00bar'`.
+//
+// The config specifies shell expansion options; nil behaves the same as an
+// empty config.
+func Format(cfg *Config, format string, args []string) (string, int, error) {
+	cfg = prepareConfig(cfg)
+	sb := cfg.strBuilder()
+
+	consumed, err := formatInto(sb, format, args)
+	if err != nil {
+		return "", 0, err
+	}
+
+	return sb.String(), consumed, err
+}
+
+func (cfg *Config) decodeANSICString(src string) string {
+	var sb strings.Builder
+	sb.Grow(len(src))
+	cLocale := cfg != nil && cfg.usesCLocale()
+
+	for i := 0; i < len(src); i++ {
+		if src[i] != '\\' {
+			sb.WriteByte(src[i])
+			continue
+		}
+		if i+1 >= len(src) {
+			sb.WriteByte('\\')
+			break
+		}
+
+		i++
+		switch c := src[i]; c {
+		case 'a':
+			sb.WriteByte('\a')
+		case 'b':
+			sb.WriteByte('\b')
+		case 'e', 'E':
+			sb.WriteByte('\x1b')
+		case 'f':
+			sb.WriteByte('\f')
+		case 'n':
+			sb.WriteByte('\n')
+		case 'r':
+			sb.WriteByte('\r')
+		case 't':
+			sb.WriteByte('\t')
+		case 'v':
+			sb.WriteByte('\v')
+		case '\\', '\'', '"', '?':
+			sb.WriteByte(c)
+		case 'c':
+			if i+1 >= len(src) {
+				sb.WriteString(`\c`)
+				break
+			}
+			i++
+			sb.WriteByte(src[i] & 0x1f)
+		case '0', '1', '2', '3', '4', '5', '6', '7':
+			start := i
+			for i+1 < len(src) && i-start < 2 && src[i+1] >= '0' && src[i+1] <= '7' {
+				i++
+			}
+			n, _ := strconv.ParseUint(src[start:i+1], 8, 8)
+			sb.WriteByte(byte(n))
+		case 'x', 'u', 'U':
+			maxDigits := 2
+			if c == 'u' {
+				maxDigits = 4
+			} else if c == 'U' {
+				maxDigits = 8
+			}
+			start := i + 1
+			end := start
+			for end < len(src) && end-start < maxDigits && isHex(src[end]) {
+				end++
+			}
+			if start == end {
+				sb.WriteByte('\\')
+				sb.WriteByte(c)
+				break
+			}
+			i = end - 1
+			n, _ := strconv.ParseUint(src[start:end], 16, 32)
+			if c == 'x' {
+				sb.WriteByte(byte(n))
+				break
+			}
+			if cLocale {
+				if n <= 0xFFFF {
+					fmt.Fprintf(&sb, "\\u%04X", n)
+				} else {
+					fmt.Fprintf(&sb, "\\U%08X", n)
+				}
+				break
+			}
+			r := rune(n)
+			if !utf8.ValidRune(r) {
+				writeRawUTF8(&sb, uint32(n))
+				break
+			}
+			sb.WriteRune(r)
+		default:
+			sb.WriteByte('\\')
+			sb.WriteByte(c)
+		}
+	}
+	return sb.String()
+}
+
+func isHex(b byte) bool {
+	return '0' <= b && b <= '9' || 'a' <= b && b <= 'f' || 'A' <= b && b <= 'F'
+}
+
+// writeRawUTF8 encodes a codepoint value as raw UTF-8 bytes, even for
+// invalid Unicode (surrogates, values above U+10FFFF). This matches bash
+// behavior for $”, printf, and echo -e with out-of-range escapes.
+func writeRawUTF8(sb *strings.Builder, v uint32) {
+	// Values above 0x7FFFFFFF exceed the 31-bit ceiling of 6-byte extended
+	// UTF-8. Bash produces no output for these, so we silently drop them.
+	if v > 0x7fffffff {
+		return
+	}
+	switch {
+	case v <= 0x7f: // 1-byte: ASCII (U+0000..U+007F)
+		sb.WriteByte(byte(v))
+	case v <= 0x7ff: // 2-byte (U+0080..U+07FF)
+		sb.WriteByte(0xc0 | byte(v>>6))
+		sb.WriteByte(0x80 | byte(v&0x3f))
+	case v <= 0xffff: // 3-byte (U+0800..U+FFFF)
+		sb.WriteByte(0xe0 | byte(v>>12))
+		sb.WriteByte(0x80 | byte((v>>6)&0x3f))
+		sb.WriteByte(0x80 | byte(v&0x3f))
+	case v <= 0x1fffff: // 4-byte (U+10000..U+1FFFFF), includes valid Unicode max U+10FFFF
+		sb.WriteByte(0xf0 | byte(v>>18))
+		sb.WriteByte(0x80 | byte((v>>12)&0x3f))
+		sb.WriteByte(0x80 | byte((v>>6)&0x3f))
+		sb.WriteByte(0x80 | byte(v&0x3f))
+	case v <= 0x3ffffff: // 5-byte (U+200000..U+3FFFFFF), beyond Unicode but bash encodes these
+		sb.WriteByte(0xf8 | byte(v>>24))
+		sb.WriteByte(0x80 | byte((v>>18)&0x3f))
+		sb.WriteByte(0x80 | byte((v>>12)&0x3f))
+		sb.WriteByte(0x80 | byte((v>>6)&0x3f))
+		sb.WriteByte(0x80 | byte(v&0x3f))
+	default: // 6-byte (U+4000000..U+7FFFFFFF), beyond Unicode but bash encodes these
+		sb.WriteByte(0xfc | byte(v>>30))
+		sb.WriteByte(0x80 | byte((v>>24)&0x3f))
+		sb.WriteByte(0x80 | byte((v>>18)&0x3f))
+		sb.WriteByte(0x80 | byte((v>>12)&0x3f))
+		sb.WriteByte(0x80 | byte((v>>6)&0x3f))
+		sb.WriteByte(0x80 | byte(v&0x3f))
+	}
+}
+
+func formatInto(sb *strings.Builder, format string, args []string) (int, error) {
+	var fmts []byte
+	initialArgs := len(args)
+
+	for i := 0; i < len(format); i++ {
+		// readDigits reads from 0 to max digits, either octal or
+		// hexadecimal.
+		readDigits := func(max int, hex bool) string {
+			j := 0
+			for ; j < max && i+j < len(format); j++ {
+				c := format[i+j]
+				if (c >= '0' && c <= '9') ||
+					(hex && c >= 'a' && c <= 'f') ||
+					(hex && c >= 'A' && c <= 'F') {
+					// valid octal or hex char
+				} else {
+					break
+				}
+			}
+			digits := format[i : i+j]
+			i += j - 1 // -1 since the outer loop does i++
+			return digits
+		}
+		c := format[i]
+		switch {
+		case c == '\\': // escaped
+			i++
+			if i >= len(format) {
+				sb.WriteByte('\\')
+				break
+			}
+			switch c = format[i]; c {
+			case 'a': // bell
+				sb.WriteByte('\a')
+			case 'b': // backspace
+				sb.WriteByte('\b')
+			case 'e', 'E': // escape
+				sb.WriteByte('\x1b')
+			case 'f': // form feed
+				sb.WriteByte('\f')
+			case 'n': // new line
+				sb.WriteByte('\n')
+			case 'r': // carriage return
+				sb.WriteByte('\r')
+			case 't': // horizontal tab
+				sb.WriteByte('\t')
+			case 'v': // vertical tab
+				sb.WriteByte('\v')
+			case '\\', '\'', '"', '?': // just the character
+				sb.WriteByte(c)
+			case '0', '1', '2', '3', '4', '5', '6', '7':
+				digits := readDigits(3, false)
+				// if digits don't fit in 8 bits, 0xff via strconv
+				n, _ := strconv.ParseUint(digits, 8, 8)
+				sb.WriteByte(byte(n))
+			case 'x', 'u', 'U':
+				i++
+				maxDigits := 2
+				switch c {
+				case 'u':
+					maxDigits = 4
+				case 'U':
+					maxDigits = 8
+				}
+				digits := readDigits(maxDigits, true)
+				if digits != "" {
+					// can't error
+					n, _ := strconv.ParseUint(digits, 16, 32)
+					if c == 'x' {
+						// always as a single byte
+						sb.WriteByte(byte(n))
+					} else if utf8.ValidRune(rune(n)) {
+						sb.WriteRune(rune(n))
+					} else {
+						writeRawUTF8(sb, uint32(n))
+					}
+					break
+				}
+				fallthrough
+			default: // no escape sequence
+				sb.WriteByte('\\')
+				sb.WriteByte(c)
+			}
+		case len(fmts) > 0:
+			switch c {
+			case '%':
+				sb.WriteByte('%')
+				fmts = nil
+			case 'c':
+				var b byte
+				if len(args) > 0 {
+					arg := ""
+					arg, args = args[0], args[1:]
+					if arg != "" {
+						b = arg[0]
+					}
+				}
+				sb.WriteByte(b)
+				fmts = nil
+			case '+', '-', ' ':
+				if len(fmts) > 1 {
+					return 0, fmt.Errorf("invalid format char: %c", c)
+				}
+				fmts = append(fmts, c)
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+				fmts = append(fmts, c)
+			case 's', 'b', 'd', 'i', 'u', 'o', 'x':
+				arg := ""
+				if len(args) > 0 {
+					arg, args = args[0], args[1:]
+				}
+				var farg any
+				if c == 'b' {
+					// Passing in nil for args ensures that % format
+					// strings aren't processed; only escape sequences
+					// will be handled.
+					_, err := formatInto(sb, arg, nil)
+					if err != nil {
+						return 0, err
+					}
+				} else if c != 's' {
+					n, _ := strconv.ParseInt(arg, 0, 0)
+					if c == 'i' || c == 'd' {
+						farg = int(n)
+					} else {
+						farg = uint(n)
+					}
+					if c == 'i' || c == 'u' {
+						c = 'd'
+					}
+				} else {
+					farg = arg
+				}
+				if farg != nil {
+					fmts = append(fmts, c)
+					fmt.Fprintf(sb, string(fmts), farg)
+				}
+				fmts = nil
+			default:
+				return 0, fmt.Errorf("invalid format char: %c", c)
+			}
+		case args != nil && c == '%':
+			// if args == nil, we are not doing format
+			// arguments
+			fmts = []byte{c}
+		default:
+			sb.WriteByte(c)
+		}
+	}
+	if len(fmts) > 0 {
+		return 0, fmt.Errorf("missing format char")
+	}
+	return initialArgs - len(args), nil
+}
+
+func (cfg *Config) fieldJoin(parts []fieldPart) string {
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1: // short-cut without a string copy
+		return parts[0].val
+	}
+	sb := cfg.strBuilder()
+	for _, part := range parts {
+		sb.WriteString(part.val)
+	}
+	return sb.String()
+}
+
+func (cfg *Config) fieldJoinGlob(parts []fieldPart) string {
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		if parts[0].glob != "" {
+			return parts[0].glob
+		}
+		return parts[0].val
+	}
+	sb := cfg.strBuilder()
+	for _, part := range parts {
+		if part.glob != "" {
+			sb.WriteString(part.glob)
+			continue
+		}
+		sb.WriteString(part.val)
+	}
+	return sb.String()
+}
+
+type fieldSplitter struct {
+	cfg            *Config
+	fields         [][]fieldPart
+	cur            []fieldPart
+	haveField      bool
+	curElideEmpty  bool
+	clusterStarted bool
+	clusterPrev    bool
+	clusterNonWS   int
+}
+
+func newFieldSplitter(cfg *Config) fieldSplitter {
+	return fieldSplitter{cfg: cfg}
+}
+
+func (s *fieldSplitter) flushField() {
+	if !s.haveField {
+		return
+	}
+	if len(s.cur) == 0 && s.curElideEmpty {
+		s.cur = nil
+		s.haveField = false
+		s.curElideEmpty = false
+		return
+	}
+	s.fields = append(s.fields, s.cur)
+	s.cur = nil
+	s.haveField = false
+	s.curElideEmpty = false
+}
+
+func (s *fieldSplitter) finishCluster() {
+	if !s.clusterStarted {
+		return
+	}
+	empties := s.clusterNonWS
+	if s.clusterPrev && empties > 0 {
+		empties--
+	}
+	for range empties {
+		s.fields = append(s.fields, nil)
+	}
+	s.clusterStarted = false
+	s.clusterPrev = false
+	s.clusterNonWS = 0
+}
+
+func (s *fieldSplitter) ensureField() {
+	s.finishCluster()
+	s.haveField = true
+	s.curElideEmpty = false
+}
+
+func (s *fieldSplitter) appendPart(part fieldPart) {
+	s.finishCluster()
+	s.cur = append(s.cur, part)
+	s.haveField = true
+	s.curElideEmpty = false
+}
+
+func (s *fieldSplitter) appendFieldParts(parts []fieldPart) {
+	for _, part := range parts {
+		if part.quote > quoteNone {
+			s.appendPart(part)
+			continue
+		}
+		s.appendUnquoted(part.val)
+	}
+}
+
+func (s *fieldSplitter) startCluster() {
+	if s.clusterStarted {
+		return
+	}
+	if s.haveField {
+		s.flushField()
+		s.clusterPrev = true
+	} else {
+		s.clusterPrev = false
+	}
+	s.clusterStarted = true
+}
+
+func (s *fieldSplitter) appendUnquoted(val string) {
+	if val == "" {
+		return
+	}
+	start := 0
+	for i := 0; i < len(val); {
+		rType, width := s.cfg.classifyIFSStringAt(val, i)
+		if rType == ifsRuneNone {
+			i += width
+			continue
+		}
+		if start < i {
+			s.appendPart(fieldPart{val: val[start:i]})
+		}
+		s.startCluster()
+		if rType == ifsRuneNonWhitespace {
+			s.clusterNonWS++
+		}
+		i += width
+		start = i
+	}
+	if start < len(val) {
+		s.appendPart(fieldPart{val: val[start:]})
+	}
+}
+
+func (s *fieldSplitter) appendSplitFields(fields [][]fieldPart, elideEmpty bool) {
+	s.finishCluster()
+	for i, field := range fields {
+		if i > 0 {
+			s.flushField()
+		}
+		if len(field) > 0 {
+			s.cur = append(s.cur, field...)
+			s.curElideEmpty = false
+		} else if !s.haveField {
+			s.curElideEmpty = elideEmpty
+		}
+		s.haveField = true
+	}
+}
+
+func (s *fieldSplitter) finish() [][]fieldPart {
+	s.finishCluster()
+	s.flushField()
+	return s.fields
+}
+
+func (cfg *Config) splitFieldParts(parts []fieldPart) [][]fieldPart {
+	splitter := newFieldSplitter(cfg)
+	splitter.appendFieldParts(parts)
+	return splitter.finish()
+}
+
+func (cfg *Config) escapedGlobField(parts []fieldPart) (escaped string, glob bool) {
+	sb := cfg.strBuilder()
+	mode := pattern.Mode(0)
+	if cfg.ExtGlob {
+		mode |= pattern.ExtendedOperators
+	}
+	for _, part := range parts {
+		if part.quote > quoteNone {
+			sb.WriteString(pattern.QuoteMeta(part.val, mode))
+			continue
+		}
+		sb.WriteString(part.val)
+		if pattern.HasMeta(part.val, mode) {
+			glob = true
+		}
+	}
+	if glob { // only copy the string if it will be used
+		escaped = sb.String()
+	}
+	return escaped, glob
+}
+
+func (cfg *Config) filterGlobIgnore(matches []string) []string {
+	if len(matches) == 0 || len(cfg.globIgnoreMatchers) == 0 {
+		return matches
+	}
+	filtered := matches[:0]
+nextMatch:
+	for _, match := range matches {
+		for _, matcher := range cfg.globIgnoreMatchers {
+			if matcher(match) {
+				continue nextMatch
+			}
+		}
+		filtered = append(filtered, match)
+	}
+	return filtered
+}
+
+func (cfg *Config) expandPathField(dir string, field []fieldPart) ([]string, error) {
+	literal := cfg.fieldJoin(field)
+	globField := slices.Clone(field)
+	for i := range globField {
+		if globField[i].glob != "" {
+			globField[i].val = globField[i].glob
+		}
+	}
+	globPath, doGlob := cfg.escapedGlobField(globField)
+	if !doGlob || !cfg.canReadDir() {
+		return []string{literal}, nil
+	}
+	matches, err := cfg.glob(dir, globPath)
+	if err != nil {
+		// We avoid [errors.As] as it allocates, and we know that [Config.glob]
+		// returns [pattern.Regexp] errors without wrapping.
+		if _, ok := err.(*pattern.SyntaxError); ok {
+			return []string{literal}, nil
+		}
+		return nil, err
+	}
+	matches = cfg.filterGlobIgnore(matches)
+	if len(matches) > 0 {
+		return matches, nil
+	}
+	switch {
+	case cfg.FailGlob:
+		return nil, FailGlobError{Pattern: globPath}
+	case cfg.NullGlob:
+		return nil, nil
+	default:
+		return []string{literal}, nil
+	}
+}
+
+// Fields is a pre-iterators API which now wraps [FieldsSeq].
+func Fields(cfg *Config, words ...*syntax.Word) ([]string, error) {
+	var fields []string
+	for s, err := range FieldsSeq(cfg, words...) {
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, s)
+	}
+	return fields, nil
+}
+
+// RedirectFields expands a single shell word for use as a file redirect target.
+// Bash applies the normal field expansion pipeline and then treats multiple
+// results as an ambiguous redirect.  Unlike command arguments, redirect targets
+// do not receive assignment-like tilde expansion (e.g. x=~ stays literal).
+func RedirectFields(cfg *Config, word *syntax.Word) ([]string, error) {
+	if word == nil {
+		return nil, nil
+	}
+	var fields []string
+	for s, err := range fieldsSeq(cfg, false, false, word) {
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, s)
+	}
+	return fields, nil
+}
+
+// DupFields expands a single shell word for use as a descriptor-dup redirect
+// target like `>&word`. Bash performs shell expansion and field splitting here,
+// but vsh intentionally keeps pathname-like literals as-is for this redirect
+// family, matching the project conformance suite.
+func DupFields(cfg *Config, word *syntax.Word) ([]string, error) {
+	if word == nil {
+		return nil, nil
+	}
+	cfg = prepareConfig(cfg)
+	fields, err := cfg.wordFields(word.Parts)
+	if err != nil {
+		return nil, err
+	}
+	strs := make([]string, len(fields))
+	for i, field := range fields {
+		strs[i] = cfg.fieldJoin(field)
+	}
+	return strs, nil
+}
+
+// FieldsSeq expands a number of words as if they were ordinary arguments in a
+// shell command. This includes brace expansion, tilde expansion, parameter
+// expansion, command substitution, arithmetic expansion, quote removal, and
+// globbing. Assignment-like tilde expansion is intentionally disabled here, so
+// words like x=~ stay literal unless they are parsed in an assignment context.
+func FieldsSeq(cfg *Config, words ...*syntax.Word) iter.Seq2[string, error] {
+	return fieldsSeq(cfg, false, cfg != nil && cfg.PreferStartupHomeForArgTilde, words...)
+}
+
+func fieldsSeq(cfg *Config, allowAssignLike, preferStartupHome bool, words ...*syntax.Word) iter.Seq2[string, error] {
+	cfg = prepareConfig(cfg)
+	dir := cfg.envGet("PWD")
+	return func(yield func(string, error) bool) {
+		for _, word := range words {
+			afterBraces := []*syntax.Word{word}
+			hadBraces := !cfg.NoBraceExpand && slices.ContainsFunc(word.Parts, func(part syntax.WordPart) bool {
+				_, ok := part.(*syntax.BraceExp)
+				return ok
+			})
+			if hadBraces {
+				var err error
+				afterBraces, err = Braces(word)
+				if err != nil {
+					yield("", err)
+					return
+				}
+			}
+			for _, word2 := range afterBraces {
+				if hadBraces {
+					// Bash performs brace expansion textually before tilde and parameter
+					// expansion, so reparse each brace-expanded word before continuing.
+					reparsed, err := reparseBraceWord(word2)
+					if err != nil {
+						yield("", err)
+						return
+					}
+					word2 = reparsed
+				}
+				wfields, err := cfg.wordFieldsOpt(word2.Parts, allowAssignLike, preferStartupHome)
+				if err != nil {
+					yield("", err)
+					return
+				}
+				for _, field := range wfields {
+					expanded, err := cfg.expandPathField(dir, field)
+					if err != nil {
+						yield("", err)
+						return
+					}
+					for _, s := range expanded {
+						if !yield(s, nil) {
+							return
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+type fieldPart struct {
+	val   string
+	glob  string
+	quote quoteLevel
+}
+
+type quoteLevel uint
+
+const (
+	quoteNone quoteLevel = iota
+	quoteNoTilde
+	quoteRegexp
+	quoteRegexpNoTilde
+	quoteAssign
+	quoteAssignArgs
+	quoteAssignNoTilde
+	quoteDouble
+	quoteHeredoc
+	quoteSingle
+)
+
+func assignmentTildeQuote(ql quoteLevel) bool {
+	return ql == quoteAssign || ql == quoteAssignArgs
+}
+
+func (cfg *Config) braceFieldParts(br *syntax.BraceExp, ql quoteLevel, fieldFn func(*syntax.Word, quoteLevel) ([]fieldPart, error)) ([]fieldPart, error) {
+	parts := []fieldPart{{val: "{"}}
+	for i, elem := range br.Elems {
+		if i > 0 {
+			if br.Sequence {
+				parts = append(parts, fieldPart{val: ".."})
+			} else {
+				parts = append(parts, fieldPart{val: ","})
+			}
+		}
+		field, err := fieldFn(elem, ql)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, field...)
+	}
+	parts = append(parts, fieldPart{val: "}"})
+	return parts, nil
+}
+
+func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart, error) {
+	var field []fieldPart
+	for i, wp := range wps {
+		switch wp := wp.(type) {
+		case *syntax.Lit:
+			s := wp.Value
+			if assignmentTildeQuote(ql) {
+				s = cfg.expandAssignmentTildeLiteral(s, i+1 < len(wps), i == 0)
+			} else if i == 0 && (ql == quoteNone || ql == quoteRegexp) {
+				if prefix, rest, expanded := cfg.expandUser(s, len(wps) > 1); expanded {
+					if ql == quoteRegexp && (prefix != "" || rest == "") {
+						field = append(field, fieldPart{
+							quote: quoteSingle,
+							val:   prefix,
+						})
+						s = rest
+					} else {
+						// TODO: return two separate fieldParts,
+						// like in wordFields?
+						s = prefix + rest
+					}
+				}
+			}
+			if (ql == quoteAssign || ql == quoteAssignNoTilde) && strings.Contains(s, "\\") {
+				sb := cfg.strBuilder()
+				for i := 0; i < len(s); i++ {
+					b := s[i]
+					if b == '\\' {
+						if i++; i >= len(s) {
+							break
+						}
+						b = s[i]
+					}
+					sb.WriteByte(b)
+				}
+				s = sb.String()
+			}
+			if (ql == quoteDouble || ql == quoteHeredoc) && strings.Contains(s, "\\") {
+				sb := cfg.strBuilder()
+				for i := 0; i < len(s); i++ {
+					b := s[i]
+					if b == '\\' && i+1 < len(s) {
+						switch s[i+1] {
+						case '"':
+							if ql != quoteDouble {
+								break
+							}
+							fallthrough
+						case '\\', '$', '`': // special chars
+							i++
+							b = s[i] // write the special char, skipping the backslash
+						}
+					}
+					sb.WriteByte(b)
+				}
+				s = sb.String()
+			}
+			s, _, _ = strings.Cut(s, "\x00") // TODO: why is this needed?
+			field = append(field, fieldPart{val: s})
+		case *syntax.SglQuoted:
+			fp := fieldPart{quote: quoteSingle, val: wp.Value}
+			if wp.Dollar {
+				fp.val = cfg.decodeANSICString(fp.val)
+				fp.val, _, _ = strings.Cut(fp.val, "\x00") // cut the string if format included \x00
+			}
+			field = append(field, fp)
+		case *syntax.DblQuoted:
+			wfield, err := cfg.wordField(wp.Parts, quoteDouble)
+			if err != nil {
+				return nil, err
+			}
+			for _, part := range wfield {
+				part.quote = quoteDouble
+				field = append(field, part)
+			}
+		case *syntax.ParamExp:
+			if parts, ok, err := cfg.paramExpWordField(wp, ql); err != nil {
+				return nil, err
+			} else if ok {
+				field = append(field, parts...)
+			} else {
+				val, err := cfg.paramExp(wp, ql)
+				if err != nil {
+					return nil, err
+				}
+				field = append(field, fieldPart{val: val})
+			}
+		case *syntax.CmdSubst:
+			val, err := cfg.cmdSubst(wp)
+			if err != nil {
+				return nil, err
+			}
+			field = append(field, fieldPart{val: val})
+		case *syntax.ArithmExp:
+			sourceStart := wp.Left.Offset() + 3
+			if wp.Bracket {
+				sourceStart = wp.Left.Offset() + 2
+			}
+			n, err := ArithmWithSource(cfg, wp.X, wp.Source, sourceStart, wp.Right.Offset())
+			if err != nil {
+				if !cfg.swallowNonFatal(err) {
+					return nil, err
+				}
+				n = 0
+			}
+			field = append(field, fieldPart{val: strconv.Itoa(n)})
+		case *syntax.BraceExp:
+			parts, err := cfg.braceFieldParts(wp, ql, func(word *syntax.Word, ql quoteLevel) ([]fieldPart, error) {
+				return cfg.wordField(word.Parts, ql)
+			})
+			if err != nil {
+				return nil, err
+			}
+			field = append(field, parts...)
+		case *syntax.ProcSubst:
+			procPath, err := cfg.runProcSubst(wp)
+			if err != nil {
+				return nil, err
+			}
+			field = append(field, fieldPart{val: procPath})
+		case *syntax.ExtGlob:
+			// Like how [Config.wordFields] deals with [syntax.ExtGlob],
+			// except that we allow these through even when [Config.ExtGlob]
+			// is false, as it only applies to pathname expansion.
+			pat, err := cfg.extGlobPatternString(wp)
+			if err != nil {
+				return nil, err
+			}
+			raw, err := cfg.extGlobLiteralString(wp)
+			if err != nil {
+				return nil, err
+			}
+			field = append(field, fieldPart{val: raw, glob: pat})
+		default:
+			panic(fmt.Sprintf("unhandled word part: %T", wp))
+		}
+	}
+	return field, nil
+}
+
+func (cfg *Config) cmdSubst(cs *syntax.CmdSubst) (string, error) {
+	sb := cfg.strBuilder()
+	if err := cfg.runCmdSubst(sb, cs); err != nil {
+		return "", err
+	}
+	out := sb.String()
+	if strings.Contains(out, "\x00") {
+		cfg.reportError(fmt.Errorf("warning: command substitution: ignored null byte in input"))
+		out = strings.ReplaceAll(out, "\x00", "")
+	}
+	return strings.TrimRight(out, "\n"), nil
+}
+
+func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
+	return cfg.wordFieldsOpt(wps, true, false)
+}
+
+// wordFieldsNoAssign is like wordFields but does not enable assignment-like
+// tilde expansion (name=~/... → name=/home/.../...).  Use it for contexts
+// where bash would not treat the word as a potential assignment, such as
+// redirect targets.
+func (cfg *Config) wordFieldsNoAssign(wps []syntax.WordPart) ([][]fieldPart, error) {
+	return cfg.wordFieldsOpt(wps, false, false)
+}
+
+func (cfg *Config) wordFieldsOpt(wps []syntax.WordPart, allowAssignLike, preferStartupHome bool) ([][]fieldPart, error) {
+	splitter := newFieldSplitter(cfg)
+	assignmentLike := false
+	assignmentPrefix := ""
+	assignmentValue := ""
+	paramQL := quoteNone
+	if allowAssignLike && len(wps) > 0 {
+		if lit, ok := wps[0].(*syntax.Lit); ok {
+			assignmentPrefix, assignmentValue, assignmentLike = assignmentLikeWordPrefix(lit.Value)
+			if assignmentLike {
+				paramQL = quoteAssignArgs
+			}
+		}
+	}
+	for i, wp := range wps {
+		switch wp := wp.(type) {
+		case *syntax.Lit:
+			s := wp.Value
+			if assignmentLike {
+				if i == 0 {
+					if assignmentPrefix != "" {
+						splitter.appendPart(fieldPart{val: assignmentPrefix})
+					}
+					s = assignmentValue
+					s = cfg.expandAssignmentTildeLiteral(s, i+1 < len(wps), true)
+				} else {
+					s = cfg.expandAssignmentTildeLiteral(s, i+1 < len(wps), false)
+				}
+			} else if i == 0 {
+				prefix, rest, expanded := cfg.expandUser(s, len(wps) > 1)
+				if preferStartupHome {
+					prefix, rest, expanded = cfg.expandUserPreferStartup(s, len(wps) > 1)
+				}
+				if expanded && (prefix != "" || rest == "") {
+					splitter.appendPart(fieldPart{
+						quote: quoteSingle,
+						val:   prefix,
+					})
+				}
+				if expanded {
+					s = rest
+				}
+			}
+			if strings.Contains(s, "\\") {
+				start := 0
+				for i := 0; i < len(s); i++ {
+					if s[i] != '\\' {
+						continue
+					}
+					if start < i {
+						splitter.appendPart(fieldPart{val: s[start:i]})
+					}
+					if i+1 >= len(s) {
+						start = len(s)
+						break
+					}
+					i++
+					splitter.appendPart(fieldPart{quote: quoteSingle, val: s[i : i+1]})
+					start = i + 1
+				}
+				s = s[start:]
+			}
+			if s != "" {
+				splitter.appendPart(fieldPart{val: s})
+			}
+		case *syntax.SglQuoted:
+			fp := fieldPart{quote: quoteSingle, val: wp.Value}
+			if wp.Dollar {
+				fp.val = cfg.decodeANSICString(fp.val)
+				fp.val, _, _ = strings.Cut(fp.val, "\x00") // cut the string if format included \x00
+			}
+			splitter.appendPart(fp)
+		case *syntax.DblQuoted:
+			if dqFields, ok, err := cfg.dblQuotedFields(wp.Parts); err != nil {
+				return nil, err
+			} else if ok {
+				splitter.appendSplitFields(dqFields, false)
+				continue
+			}
+			wfield, err := cfg.wordField(wp.Parts, quoteDouble)
+			if err != nil {
+				return nil, err
+			}
+			if len(wfield) == 0 {
+				splitter.appendPart(fieldPart{quote: quoteDouble, val: ""})
+				continue
+			}
+			for _, part := range wfield {
+				part.quote = quoteDouble
+				splitter.appendPart(part)
+			}
+		case *syntax.ParamExp:
+			if fields2, ok, elideEmpty, err := cfg.paramExpFields(wp, paramQL); err != nil {
+				return nil, err
+			} else if ok {
+				splitter.appendSplitFields(fields2, elideEmpty)
+			} else if parts, ok, err := cfg.paramExpSplitValue(wp, paramQL); err != nil {
+				return nil, err
+			} else if ok {
+				splitter.appendFieldParts(parts)
+			} else {
+				val, err := cfg.paramExp(wp, paramQL)
+				if err != nil {
+					return nil, err
+				}
+				splitter.appendUnquoted(val)
+			}
+		case *syntax.CmdSubst:
+			val, err := cfg.cmdSubst(wp)
+			if err != nil {
+				return nil, err
+			}
+			splitter.appendUnquoted(val)
+		case *syntax.ArithmExp:
+			sourceStart := wp.Left.Offset() + 3
+			if wp.Bracket {
+				sourceStart = wp.Left.Offset() + 2
+			}
+			n, err := ArithmWithSource(cfg, wp.X, wp.Source, sourceStart, wp.Right.Offset())
+			if err != nil {
+				if !cfg.swallowNonFatal(err) {
+					return nil, err
+				}
+				n = 0
+			}
+			splitter.appendPart(fieldPart{val: strconv.Itoa(n)})
+		case *syntax.BraceExp:
+			parts, err := cfg.braceFieldParts(wp, quoteNone, func(word *syntax.Word, ql quoteLevel) ([]fieldPart, error) {
+				return cfg.wordField(word.Parts, ql)
+			})
+			if err != nil {
+				return nil, err
+			}
+			for _, part := range parts {
+				splitter.appendPart(part)
+			}
+		case *syntax.ProcSubst:
+			procPath, err := cfg.runProcSubst(wp)
+			if err != nil {
+				return nil, err
+			}
+			splitter.appendUnquoted(procPath)
+		case *syntax.ExtGlob:
+			// We don't translate or interpret the pattern here in any way;
+			// that's done later when globbing takes place via [pattern.Regexp].
+			// Here, all we do is keep the extended globbing expression in string form.
+			//
+			// TODO(v4): perhaps the syntax parser should keep extended globbing expressions
+			// as plain literal strings, because a custom node is not particularly helpful.
+			// It's not like other globbing operators like `*` or `**` get their own nodes.
+			pat, err := cfg.extGlobPatternString(wp)
+			if err != nil {
+				return nil, err
+			}
+			raw, err := cfg.extGlobLiteralString(wp)
+			if err != nil {
+				return nil, err
+			}
+			splitter.appendPart(fieldPart{val: raw, glob: pat})
+		default:
+			panic(fmt.Sprintf("unhandled word part: %T", wp))
+		}
+	}
+	return splitter.finish(), nil
+}
+
+func (cfg *Config) dblQuotedFields(wps []syntax.WordPart) ([][]fieldPart, bool, error) {
+	sawArray := false
+	for _, wp := range wps {
+		pe, ok := wp.(*syntax.ParamExp)
+		if !ok {
+			continue
+		}
+		if _, handled, err := cfg.quotedElemFields(pe); err != nil {
+			return nil, false, err
+		} else if handled {
+			sawArray = true
+			break
+		}
+	}
+	if !sawArray {
+		return nil, false, nil
+	}
+
+	var fields [][]fieldPart
+	var curField []fieldPart
+	flush := func() {
+		copied := append([]fieldPart(nil), curField...)
+		fields = append(fields, copied)
+		curField = nil
+	}
+	for _, wp := range wps {
+		if pe, ok := wp.(*syntax.ParamExp); ok {
+			elems, handled, err := cfg.quotedElemFields(pe)
+			if err != nil {
+				return nil, false, err
+			}
+			if handled {
+				switch len(elems) {
+				case 0:
+					continue
+				case 1:
+					curField = append(curField, fieldPart{quote: quoteDouble, val: elems[0]})
+					continue
+				}
+				curField = append(curField, fieldPart{quote: quoteDouble, val: elems[0]})
+				flush()
+				for _, elem := range elems[1 : len(elems)-1] {
+					fields = append(fields, []fieldPart{{quote: quoteDouble, val: elem}})
+				}
+				curField = []fieldPart{{quote: quoteDouble, val: elems[len(elems)-1]}}
+				continue
+			}
+		}
+		parts, err := cfg.wordField([]syntax.WordPart{wp}, quoteDouble)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, part := range parts {
+			part.quote = quoteDouble
+			curField = append(curField, part)
+		}
+	}
+	if len(curField) > 0 {
+		fields = append(fields, append([]fieldPart(nil), curField...))
+	}
+	return fields, true, nil
+}
+
+// quotedElemFields returns the list of elements resulting from a quoted
+// parameter expansion that should be treated especially, like "${foo[@]}".
+func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, bool, error) {
+	if pe == nil || pe.Length || pe.Width || pe.IsSet {
+		return nil, false, nil
+	}
+	if err := invalidParamExpansion(pe); err != nil {
+		return nil, false, err
+	}
+	if pe.Excl {
+		state, err := cfg.paramExpState(indirectHolderParamExp(pe))
+		if err != nil {
+			return nil, false, err
+		}
+		switch indirectModeFor(pe, state) {
+		case indirectResolve:
+			resolved, target, err := cfg.resolveIndirectTargetState(pe, state)
+			if err != nil {
+				return nil, false, err
+			}
+			if target != nil {
+				if quotedIndirectArrayTarget(target) && pe.Exp != nil &&
+					(pe.Exp.Op == syntax.AlternateUnset || pe.Exp.Op == syntax.AlternateUnsetOrNull ||
+						pe.Exp.Op == syntax.DefaultUnset || pe.Exp.Op == syntax.DefaultUnsetOrNull ||
+						pe.Exp.Op == syntax.AssignUnset || pe.Exp.Op == syntax.AssignUnsetOrNull ||
+						pe.Exp.Op == syntax.ErrorUnset || pe.Exp.Op == syntax.ErrorUnsetOrNull) {
+					_, elems, isArr := cfg.quotedArrayFields(target)
+					hasElems := len(elems) > 0
+					null := !hasElems
+					if !isArr {
+						if resolved.vr.IsSet() {
+							hasElems = true
+							null = resolved.str == ""
+							elems = []string{resolved.str}
+						} else {
+							return nil, false, nil
+						}
+					}
+					switch pe.Exp.Op {
+					case syntax.AlternateUnset, syntax.AlternateUnsetOrNull:
+						if pe.Exp.Op == syntax.AlternateUnset && hasElems || pe.Exp.Op == syntax.AlternateUnsetOrNull && !null {
+							word, err := cfg.quotedParamWord(pe.Exp.Word)
+							return word, true, err
+						}
+					case syntax.DefaultUnset, syntax.DefaultUnsetOrNull:
+						if pe.Exp.Op == syntax.DefaultUnset && !hasElems || pe.Exp.Op == syntax.DefaultUnsetOrNull && null {
+							word, err := cfg.quotedParamWord(pe.Exp.Word)
+							return word, true, err
+						}
+					case syntax.ErrorUnset, syntax.ErrorUnsetOrNull:
+						if pe.Exp.Op == syntax.ErrorUnset && !hasElems || pe.Exp.Op == syntax.ErrorUnsetOrNull && null {
+							return nil, false, nil
+						}
+					case syntax.AssignUnset, syntax.AssignUnsetOrNull:
+						if pe.Exp.Op == syntax.AssignUnset && !hasElems || pe.Exp.Op == syntax.AssignUnsetOrNull && null {
+							return nil, false, nil
+						}
+					}
+					targetState, err := cfg.paramExpState(target)
+					if err != nil {
+						return nil, false, err
+					}
+					elems, err = cfg.transformArrayElems(target, targetState, elems)
+					if err != nil {
+						return nil, false, err
+					}
+					if arrayExpansionIsStar(target) {
+						return []string{cfg.ifsJoin(elems)}, true, nil
+					}
+					return elems, true, nil
+				}
+				resolvedPE := *pe
+				resolvedPE.Excl = false
+				resolvedPE.Param = target.Param
+				resolvedPE.Index = target.Index
+				if fields, ok, err := cfg.quotedElemFields(&resolvedPE); err != nil {
+					return nil, false, err
+				} else if ok {
+					return fields, true, nil
+				}
+			}
+			return nil, false, nil
+		case indirectNames:
+			switch pe.Names {
+			case syntax.NamesPrefixWords: // "${!prefix@}"
+				return cfg.namesByPrefix(pe.Param.Value), true, nil
+			case syntax.NamesPrefix: // "${!prefix*}"
+				return nil, false, nil
+			}
+		case indirectKeys:
+			if keys, ok := directKeyExpansionValues(state.vr); ok {
+				if subscriptLit(pe.Index) == "*" {
+					return []string{cfg.ifsJoin(keys)}, true, nil
+				}
+				return keys, true, nil
+			}
+		}
+		return nil, false, nil
+	}
+	fields, elems, ok := cfg.quotedArrayFields(pe)
+	if !ok {
+		return nil, false, nil
+	}
+	if pe.Exp == nil && pe.Repl == nil {
+		return fields, true, nil
+	}
+
+	hasElems := len(elems) > 0
+	null := arrayExpansionNull(pe, fields, elems)
+	if pe.Exp != nil {
+		switch pe.Exp.Op {
+		case syntax.AlternateUnset, syntax.AlternateUnsetOrNull:
+			if pe.Exp.Op == syntax.AlternateUnset && hasElems || pe.Exp.Op == syntax.AlternateUnsetOrNull && !null {
+				word, err := cfg.quotedParamWord(pe.Exp.Word)
+				return word, true, err
+			}
+		case syntax.DefaultUnset, syntax.DefaultUnsetOrNull:
+			if pe.Exp.Op == syntax.DefaultUnset && !hasElems || pe.Exp.Op == syntax.DefaultUnsetOrNull && null {
+				word, err := cfg.quotedParamWord(pe.Exp.Word)
+				return word, true, err
+			}
+		case syntax.ErrorUnset, syntax.ErrorUnsetOrNull:
+			if pe.Exp.Op == syntax.ErrorUnset && !hasElems || pe.Exp.Op == syntax.ErrorUnsetOrNull && null {
+				return nil, false, nil
+			}
+		case syntax.AssignUnset, syntax.AssignUnsetOrNull:
+			if pe.Exp.Op == syntax.AssignUnset && !hasElems || pe.Exp.Op == syntax.AssignUnsetOrNull && null {
+				return nil, false, nil
+			}
+		}
+	}
+	state, err := cfg.paramExpState(pe)
+	if err != nil {
+		return nil, false, err
+	}
+	elems, err = cfg.transformArrayElems(pe, state, elems)
+	if err != nil {
+		return nil, false, err
+	}
+	if arrayExpansionIsStar(pe) {
+		return []string{cfg.ifsJoin(elems)}, true, nil
+	}
+	return elems, true, nil
+}
+
+func quotedIndirectArrayTarget(pe *syntax.ParamExp) bool {
+	switch pe.Param.Value {
+	case "@", "*":
+		return true
+	}
+	switch subscriptLit(pe.Index) {
+	case "@", "*":
+		return true
+	default:
+		return false
+	}
+}
+
+func (cfg *Config) quotedParamWord(word *syntax.Word) ([]string, error) {
+	var parts []syntax.WordPart
+	if word != nil {
+		parts = word.Parts
+	}
+	fields, err := cfg.wordFields([]syntax.WordPart{&syntax.DblQuoted{Parts: parts}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(fields))
+	for i, field := range fields {
+		out[i] = cfg.fieldJoin(field)
+	}
+	return out, nil
+}
+
+func (cfg *Config) quotedArrayFields(pe *syntax.ParamExp) ([]string, []string, bool) {
+	switch name := pe.Param.Value; name {
+	case "*": // "${*}" or "${*:offset:length}"
+		elems := cfg.sliceElems(pe, cfg.Env.Get(name).List, nil, true, false)
+		return []string{cfg.ifsJoin(elems)}, elems, true
+	case "@": // "${@}" or "${@:offset:length}"
+		elems := cfg.sliceElems(pe, cfg.Env.Get(name).List, nil, true, false)
+		return elems, elems, true
+	}
+
+	name := pe.Param.Value
+	ref, vr, err := cfg.Env.Get(name).ResolveRef(cfg.Env, &syntax.VarRef{
+		Name:  pe.Param,
+		Index: pe.Index,
+	})
+	if err != nil {
+		return nil, nil, false
+	}
+	index := pe.Index
+	if ref != nil {
+		index = ref.Index
+	}
+	switch subscriptLit(index) {
+	case "@": // "${name[@]}"
+		switch vr.Kind {
+		case Indexed:
+			elems := cfg.sliceElems(pe, vr.List, vr.Indices, false, false)
+			return elems, elems, true
+		case Associative:
+			elems := cfg.sliceElems(pe, sortedMapValues(vr.Map), nil, false, true)
+			return elems, elems, true
+		case Unknown:
+			if !vr.IsSet() {
+				// An unset variable expanded as "${name[@]}" produces
+				// zero fields, just like an empty array.
+				return []string{}, nil, true
+			}
+		}
+	case "*": // "${name[*]}"
+		if vr.Kind == Indexed {
+			elems := cfg.sliceElems(pe, vr.List, vr.Indices, false, false)
+			return []string{cfg.ifsJoin(elems)}, elems, true
+		}
+		if vr.Kind == Associative {
+			elems := cfg.sliceElems(pe, sortedMapValues(vr.Map), nil, false, true)
+			return []string{cfg.ifsJoin(elems)}, elems, true
+		}
+	}
+	return nil, nil, false
+}
+
+// sliceElems applies ${var:offset:length} slicing to a list of elements.
+// When positional is true, $0 is prepended to the list before slicing.
+// When assocAll is true, positive offsets use bash's associative-array quirk:
+// offsets are effectively 1-based, so 0 and 1 both select the first element.
+// In bash, positional parameter offsets ($@ and $*) are 1-based and
+// offset 0 includes $0 (the shell or script name). Negative offsets
+// count from $# + 1, so $0 is reachable via large enough negative values.
+func (cfg *Config) sliceElems(pe *syntax.ParamExp, elems []string, indices []int, positional bool, assocAll bool) []string {
+	if pe.Slice == nil {
+		return elems
+	}
+	if positional {
+		elems = append([]string{cfg.Env.Get("0").Str}, elems...)
+		indices = nil
+	}
+	if len(indices) > 0 {
+		start := 0
+		if pe.Slice.Offset != nil {
+			offset, err := Arithm(cfg, pe.Slice.Offset)
+			if err != nil {
+				return elems
+			}
+			if offset < 0 {
+				offset = indices[len(indices)-1] + 1 + offset
+				if offset < 0 {
+					return nil
+				}
+			}
+			start = len(elems)
+			for i, index := range indices {
+				if index >= offset {
+					start = i
+					break
+				}
+			}
+			elems = elems[start:] //nolint:nilaway // elems is non-nil here: start is set by iterating indices which is non-empty (len(indices)>0 guard above)
+			indices = indices[start:]
+		}
+		if pe.Slice.Length != nil {
+			length, err := Arithm(cfg, pe.Slice.Length)
+			if err != nil {
+				return elems
+			}
+			if length < 0 {
+				cfg.reportNegativeSubstringLength(pe, length)
+				return nil
+			}
+			if length == 0 {
+				return nil
+			}
+			if length < len(elems) {
+				elems = elems[:length]
+			}
+		}
+		return elems
+	}
+	slicePos := func(n int) int {
+		if n < 0 {
+			n = len(elems) + n
+			if n < 0 {
+				n = len(elems)
+			}
+		} else if n > len(elems) {
+			n = len(elems)
+		}
+		return n
+	}
+	if pe.Slice.Offset != nil {
+		offset, err := Arithm(cfg, pe.Slice.Offset)
+		if err != nil {
+			return elems
+		}
+		if assocAll && offset > 0 {
+			offset--
+		}
+		elems = elems[slicePos(offset):]
+	}
+	if pe.Slice.Length != nil {
+		length, err := Arithm(cfg, pe.Slice.Length)
+		if err != nil {
+			return elems
+		}
+		if length < 0 {
+			cfg.reportNegativeSubstringLength(pe, length)
+			return nil
+		}
+		elems = elems[:slicePos(length)]
+	}
+	return elems
+}
+
+func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest string, expanded bool) {
+	return cfg.expandUserWithHome(field, moreFields, cfg.StartupHome, false)
+}
+
+func (cfg *Config) expandUserPreferStartup(field string, moreFields bool) (prefix, rest string, expanded bool) {
+	return cfg.expandUserWithHome(field, moreFields, cfg.StartupHome, true)
+}
+
+func (cfg *Config) expandAssignmentUser(field string, moreFields bool) (prefix, rest string, expanded bool) {
+	return cfg.expandUserWithHome(field, moreFields, cfg.StartupHome, cfg.PreferStartupHomeForAssignmentTilde)
+}
+
+func (cfg *Config) expandUserWithHome(field string, moreFields bool, startupHome string, preferStartupHome bool) (prefix, rest string, expanded bool) {
+	name, ok := strings.CutPrefix(field, "~")
+	if !ok {
+		// No tilde prefix to expand, e.g. "foo".
+		return "", field, false
+	}
+	i := strings.IndexByte(name, '/')
+	if i < 0 && moreFields {
+		// There is a tilde prefix, but followed by more fields, e.g. "~'foo'".
+		// We only proceed if an unquoted slash was found in this field, e.g. "~/'foo'".
+		return "", field, false
+	}
+	if i >= 0 {
+		rest = name[i:]
+		name = name[:i]
+	}
+	if name == "" {
+		// Current user; some bash-compatible paths prefer the shell's startup
+		// home over a later HOME assignment, while other assignment-like paths
+		// intentionally continue to use the live HOME variable. Callers choose
+		// via preferStartupHome.
+		if preferStartupHome && startupHome != "" {
+			prefix, rest := joinTildeHome(startupHome, rest)
+			return prefix, rest, true
+		}
+		if vr := cfg.TildeEnv.Get("HOME"); vr.IsSet() {
+			prefix, rest := joinTildeHome(vr.String(), rest)
+			return prefix, rest, true
+		}
+		if !preferStartupHome && startupHome != "" {
+			prefix, rest := joinTildeHome(startupHome, rest)
+			return prefix, rest, true
+		}
+
+		if cfg.platformOS() == "windows" {
+			if vr := cfg.TildeEnv.Get("USERPROFILE"); vr.IsSet() {
+				prefix, rest := joinTildeHome(vr.String(), rest)
+				return prefix, rest, true
+			}
+		}
+		return "", field, false
+	}
+
+	if vr := cfg.TildeEnv.Get("HOME " + name); vr.IsSet() {
+		prefix, rest := joinTildeHome(vr.String(), rest)
+		return prefix, rest, true
+	}
+	return "", field, false
+}
+
+func joinTildeHome(home, rest string) (string, string) {
+	if home == "/" && strings.HasPrefix(rest, "/") {
+		rest = strings.TrimPrefix(rest, "/")
+	}
+	return home, rest
+}
+
+func (cfg *Config) platformOS() string {
+	if cfg.PlatformOS != "" {
+		return cfg.PlatformOS
+	}
+	return runtime.GOOS
+}
+
+func findAllIndex(pat, name string, n int) [][]int {
+	expr, err := pattern.Regexp(pat, pattern.ExtendedOperators)
+	if err != nil {
+		return nil
+	}
+	rx := regexp.MustCompile(expr)
+	return rx.FindAllStringIndex(name, n)
+}
+
+var (
+	rxGlobStar        = regexp.MustCompile(`^[^/.][^/]*$`)
+	rxGlobStarDotGlob = regexp.MustCompile(`^[^/]*$`)
+)
+
+// pathJoin2 is a simpler version of [path.Join] without cleaning the result,
+// since that's needed for globbing.
+func pathJoin2(elem1, elem2 string) string {
+	if elem1 == "" {
+		return elem2
+	}
+	if strings.HasSuffix(elem1, "/") {
+		return elem1 + elem2
+	}
+	return elem1 + "/" + elem2
+}
+
+// pathSplit splits a POSIX shell path into its elements, retaining empty ones.
+func pathSplit(name string) []string {
+	return strings.Split(name, "/")
+}
+
+// EstimateGlobOperations returns the shell-core budget cost for one pathname
+// glob pattern after quote removal and field splitting.
+func EstimateGlobOperations(pat string) int64 {
+	if pat == "" || !pattern.HasMeta(pat, pattern.ExtendedOperators) {
+		return 0
+	}
+	ops := int64(1)
+	for _, part := range pathSplit(pat) {
+		if part == "" {
+			continue
+		}
+		if pattern.HasMeta(part, pattern.ExtendedOperators) {
+			ops++
+		}
+	}
+	return ops
+}
+
+type globPartKind uint8
+
+const (
+	globPartSpecial globPartKind = iota
+	globPartLiteral
+	globPartMeta
+	globPartGlobStar
+)
+
+type globPart struct {
+	text    string
+	kind    globPartKind
+	matcher func(string) bool
+}
+
+type globDirMatch struct {
+	name       string
+	path       string
+	canDescend bool
+}
+
+type globReadDirResult struct {
+	entries []fs.DirEntry
+	err     error
+}
+
+type globPartsCacheKey struct {
+	pattern    string
+	extGlob    bool
+	noCaseGlob bool
+	leadingDot bool
+	globStar   bool
+}
+
+type globState struct {
+	cfg             *Config
+	base            string
+	parts           []globPart
+	hasGlobStar     bool
+	globStarMatcher func(string) bool
+	readDirCache    map[string]globReadDirResult
+}
+
+type globMergeItem struct {
+	matches []string
+	index   int
+}
+
+type globMergeHeap []globMergeItem
+
+func (h globMergeHeap) Len() int { return len(h) }
+
+func (h globMergeHeap) Less(i, j int) bool {
+	return cmp.Compare(h[i].matches[h[i].index], h[j].matches[h[j].index]) < 0
+}
+
+func (h globMergeHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *globMergeHeap) Push(x any) {
+	*h = append(*h, x.(globMergeItem))
+}
+
+func (h *globMergeHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+func (cfg *Config) glob(base, pat string) ([]string, error) {
+	parts := pathSplit(pat)
+	start := ""
+	if path.IsAbs(pat) {
+		start = "/"
+		parts = parts[1:]
+	}
+	// TODO: as an optimization, we could do chunks of the path all at once,
+	// like doing a single stat for "/foo/bar" in "/foo/bar/*".
+	state, err := cfg.newGlobState(base, pat, parts)
+	if err != nil {
+		return nil, err
+	}
+	var matches []string
+	if state.hasGlobStar {
+		matches, err = state.walk(start, 0, nil)
+	} else {
+		matches, err = state.walkIterative(start)
+	}
+	if err != nil {
+		return nil, err
+	}
+	cfg.sortGlobMatches(matches)
+	matches = slices.Compact(matches)
+	// Remove any empty matches left behind from "**".
+	if len(matches) > 0 && matches[0] == "" {
+		matches = matches[1:]
+	}
+	return matches, nil
+}
+
+func (cfg *Config) sortGlobMatches(matches []string) {
+	if len(matches) < 2 {
+		return
+	}
+	collator := cfg.globCollator()
+	if collator == nil {
+		return
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		return collator.CompareString(matches[i], matches[j]) < 0
+	})
+}
+
+func (cfg *Config) globCollator() *collate.Collator {
+	if cfg == nil {
+		return nil
+	}
+	locale := cfg.globCollationLocale()
+	if cfg.globCollatorCached && cfg.globCollatorLocale == locale {
+		return cfg.globCollatorValue
+	}
+	cfg.globCollatorLocale = locale
+	cfg.globCollatorValue = nil
+	cfg.globCollatorCached = true
+	if locale == "" || usesByteCollation(locale) {
+		return nil
+	}
+	tag, err := language.Parse(normalizeLocaleTag(locale))
+	if err != nil {
+		return nil
+	}
+	cfg.globCollatorValue = collate.New(tag)
+	return cfg.globCollatorValue
+}
+
+func (cfg *Config) globCollationLocale() string {
+	if cfg == nil || cfg.Env == nil {
+		return ""
+	}
+	for _, name := range []string{"LC_ALL", "LC_COLLATE", "LANG"} {
+		if value := strings.TrimSpace(cfg.envGet(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func usesByteCollation(locale string) bool {
+	switch strings.ToUpper(strings.TrimSpace(locale)) {
+	case "", "C", "POSIX", "C.UTF-8", "C.UTF_8":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeLocaleTag(locale string) string {
+	locale = strings.TrimSpace(locale)
+	if idx := strings.IndexByte(locale, '@'); idx >= 0 {
+		locale = locale[:idx]
+	}
+	if idx := strings.IndexByte(locale, '.'); idx >= 0 {
+		locale = locale[:idx]
+	}
+	return strings.ReplaceAll(locale, "_", "-")
+}
+
+func (cfg *Config) newGlobState(base, pat string, parts []string) (*globState, error) {
+	compiled, hasGlobStar, err := cfg.compileGlobPartsCached(pat, parts)
+	if err != nil {
+		return nil, err
+	}
+	globStarMatcher := rxGlobStar.MatchString
+	if cfg.globLeadingDot() {
+		globStarMatcher = rxGlobStarDotGlob.MatchString
+	}
+	return &globState{
+		cfg:             cfg,
+		base:            base,
+		parts:           compiled,
+		hasGlobStar:     hasGlobStar,
+		globStarMatcher: globStarMatcher,
+		readDirCache:    make(map[string]globReadDirResult, len(parts)+1),
+	}, nil
+}
+
+func (cfg *Config) compileGlobPartsCached(pat string, parts []string) ([]globPart, bool, error) {
+	key := globPartsCacheKey{
+		pattern:    pat,
+		extGlob:    cfg.ExtGlob,
+		noCaseGlob: cfg.NoCaseGlob,
+		leadingDot: cfg.globLeadingDot(),
+		globStar:   cfg.GlobStar,
+	}
+	if cfg.globPartsCached && cfg.globPartsCacheKey == key {
+		return cfg.globPartsCache, cfg.globPartsHaveStar, nil
+	}
+	compiled, hasGlobStar, err := cfg.compileGlobParts(parts)
+	if err != nil {
+		return nil, false, err
+	}
+	cfg.globPartsCacheKey = key
+	cfg.globPartsCache = compiled
+	cfg.globPartsHaveStar = hasGlobStar
+	cfg.globPartsCached = true
+	return compiled, hasGlobStar, nil
+}
+
+func (cfg *Config) compileGlobParts(parts []string) ([]globPart, bool, error) {
+	metaMode := pattern.Mode(0)
+	if cfg.ExtGlob {
+		metaMode |= pattern.ExtendedOperators
+	}
+	matchMode := pattern.Filenames | pattern.EntireString | pattern.NoGlobStar
+	if cfg.NoCaseGlob {
+		matchMode |= pattern.NoGlobCase
+	}
+	if cfg.globLeadingDot() {
+		matchMode |= pattern.GlobLeadingDot
+	}
+	if cfg.ExtGlob {
+		matchMode |= pattern.ExtendedOperators
+	}
+	compiled := make([]globPart, 0, len(parts))
+	hasGlobStar := false
+	for _, part := range parts {
+		switch {
+		case part == "", part == ".", part == "..":
+			compiled = append(compiled, globPart{text: part, kind: globPartSpecial})
+		case part == "**" && cfg.GlobStar:
+			compiled = append(compiled, globPart{text: part, kind: globPartGlobStar})
+			hasGlobStar = true
+		case !pattern.HasMeta(part, metaMode):
+			compiled = append(compiled, globPart{text: part, kind: globPartLiteral})
+		default:
+			matcher, err := pattern.ExtendedPatternMatcher(part, matchMode)
+			if err != nil {
+				return nil, false, err
+			}
+			compiled = append(compiled, globPart{text: part, kind: globPartMeta, matcher: matcher})
+		}
+	}
+	return compiled, hasGlobStar, nil
+}
+
+func (state *globState) walk(dir string, partIndex int, matches []string) ([]string, error) {
+	if partIndex == len(state.parts) {
+		return append(matches, dir), nil
+	}
+	part := state.parts[partIndex]
+	wantDir := partIndex < len(state.parts)-1
+	switch part.kind {
+	case globPartSpecial:
+		return state.walk(pathJoin2(dir, part.text), partIndex+1, matches)
+	case globPartLiteral:
+		joined := pathJoin2(dir, part.text)
+		if !state.literalPathMatches(state.fullPath(joined), wantDir) {
+			return matches, nil
+		}
+		return state.walk(joined, partIndex+1, matches)
+	case globPartMeta:
+		dirMatches, err := state.globDir(dir, part.matcher, wantDir, false, nil)
+		if err != nil {
+			return matches, err
+		}
+		for _, match := range dirMatches {
+			matches, err = state.walk(match.path, partIndex+1, matches)
+			if err != nil {
+				return matches, err
+			}
+		}
+		return matches, nil
+	case globPartGlobStar:
+		if !wantDir {
+			return state.walkGlobStarFinal(dir, true, matches)
+		}
+		zeroMatches, err := state.walk(pathJoin2(dir, ""), partIndex+1, nil)
+		if err != nil {
+			return matches, err
+		}
+		var childMatches []string
+		if childDirs, err := state.globDir(dir, state.globStarMatcher, true, false, nil); err == nil {
+			for _, child := range childDirs {
+				if child.name == "." || child.name == ".." {
+					continue
+				}
+				childMatches, err = state.walk(child.path, partIndex, childMatches)
+				if err != nil {
+					return matches, err
+				}
+			}
+		}
+		return mergeGlobMatches(matches, zeroMatches, childMatches), nil
+	default:
+		return matches, nil
+	}
+}
+
+func (state *globState) walkIterative(start string) ([]string, error) {
+	matches := []string{start}
+	var (
+		newMatches []string
+		dirMatches []globDirMatch
+	)
+	for partIndex, part := range state.parts {
+		wantDir := partIndex < len(state.parts)-1
+		switch part.kind {
+		case globPartSpecial:
+			for i, dir := range matches {
+				matches[i] = pathJoin2(dir, part.text)
+			}
+			continue
+		case globPartLiteral:
+			newMatches = newMatches[:0]
+			for _, dir := range matches {
+				joined := pathJoin2(dir, part.text)
+				if state.literalPathMatches(state.fullPath(joined), wantDir) {
+					newMatches = append(newMatches, joined)
+				}
+			}
+			matches, newMatches = newMatches, matches[:0]
+		case globPartMeta:
+			newMatches = newMatches[:0]
+			for _, dir := range matches {
+				dirMatches = dirMatches[:0]
+				matched, err := state.globDir(dir, part.matcher, wantDir, false, dirMatches)
+				if err != nil {
+					return nil, err
+				}
+				for _, match := range matched {
+					newMatches = append(newMatches, match.path)
+				}
+			}
+			matches, newMatches = newMatches, matches[:0]
+		default:
+			return state.walk(start, 0, nil)
+		}
+	}
+	return matches, nil
+}
+
+func (state *globState) walkGlobStarFinal(dir string, includeZeroMatch bool, matches []string) ([]string, error) {
+	if includeZeroMatch {
+		matches = append(matches, pathJoin2(dir, ""))
+	} else {
+		matches = append(matches, dir)
+	}
+	if dirMatches, err := state.globDir(dir, state.globStarMatcher, false, true, nil); err == nil {
+		streams := make([][]string, 0, len(dirMatches))
+		for _, match := range dirMatches {
+			if match.canDescend && match.name != "." && match.name != ".." {
+				stream, err := state.walkGlobStarFinal(match.path, false, nil)
+				if err != nil {
+					return matches, err
+				}
+				streams = append(streams, stream)
+				continue
+			}
+			streams = append(streams, []string{match.path})
+		}
+		return mergeManyGlobMatches(matches, streams), nil
+	}
+	return matches, nil
+}
+
+func (state *globState) literalPathMatches(fullPath string, wantDir bool) bool {
+	// We can't use [Config.ReadDir] on the parent and match the directory
+	// entry by name, because short paths on Windows break that.
+	// Our only option is to [Config.ReadDir] on the directory entry itself,
+	// which can be wasteful if we only want to see if it exists,
+	// but at least it's correct in all scenarios.
+	_, err := state.readDir(fullPath)
+	if err == nil {
+		return true
+	}
+	if isWindowsErrPathNotFound(err) {
+		return !wantDir
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	return !wantDir
+}
+
+func (state *globState) globDir(dir string, matcher func(string) bool, wantDir bool, needDescend bool, matches []globDirMatch) ([]globDirMatch, error) {
+	fullDir := state.fullPath(dir)
+	infos, err := state.readDir(fullDir)
+	if err != nil {
+		// We still want to return matches, for the sake of reusing slices.
+		return matches, err
+	}
+	needed := 0
+	if state.cfg.includeDotDotCandidates() {
+		for _, name := range []string{".", ".."} {
+			if matcher(name) {
+				needed++
+			}
+		}
+	}
+	if wantDir {
+		for _, info := range infos {
+			mode := info.Type()
+			if mode&os.ModeSymlink != 0 || mode.IsDir() {
+				needed++
+			}
+		}
+	} else {
+		needed += len(infos)
+	}
+	if cap(matches) < needed {
+		matches = make([]globDirMatch, 0, needed)
+	} else {
+		matches = matches[:0]
+	}
+	if state.cfg.includeDotDotCandidates() {
+		for _, name := range []string{".", ".."} {
+			if matcher(name) {
+				matches = append(matches, globDirMatch{name: name, path: pathJoin2(dir, name), canDescend: true})
+			}
+		}
+	}
+	for _, info := range infos {
+		name := info.Name()
+		if !matcher(name) {
+			continue
+		}
+		mode := info.Type()
+		if wantDir && mode&os.ModeSymlink == 0 && !mode.IsDir() {
+			continue
+		}
+		match := globDirMatch{name: name}
+		switch {
+		case mode&os.ModeSymlink != 0:
+			// ReadDir on the child path both answers the wantDir check and seeds
+			// the per-glob cache for a later descent into the same symlink target.
+			fullPath := pathJoin2(fullDir, name)
+			if _, err := state.readDir(fullPath); err != nil {
+				if wantDir {
+					continue
+				}
+			} else {
+				match.canDescend = true
+			}
+		case mode.IsDir():
+			match.canDescend = true
+		case wantDir:
+			continue
+		}
+		if needDescend && wantDir {
+			match.canDescend = true
+		}
+		match.path = pathJoin2(dir, name)
+		matches = append(matches, match)
+	}
+	return matches, nil
+}
+
+func (state *globState) fullPath(name string) string {
+	if path.IsAbs(name) {
+		return name
+	}
+	return path.Join(state.base, name)
+}
+
+func (state *globState) readDir(name string) ([]fs.DirEntry, error) {
+	if cached, ok := state.readDirCache[name]; ok {
+		return cached.entries, cached.err
+	}
+	entries, err := state.cfg.readDir(name)
+	state.readDirCache[name] = globReadDirResult{entries: entries, err: err}
+	return entries, err
+}
+
+func mergeGlobMatches(dst, left, right []string) []string {
+	base := len(dst)
+	total := len(left) + len(right)
+	if total == 0 {
+		return dst
+	}
+	need := base + total
+	if dst == nil || cap(dst) < need {
+		grown := make([]string, need)
+		copy(grown, dst)
+		dst = grown
+	} else {
+		dst = dst[:need]
+	}
+	out := base
+	i, j := 0, 0
+	for i < len(left) && j < len(right) {
+		if cmp.Compare(left[i], right[j]) <= 0 {
+			dst[out] = left[i]
+			out++
+			i++
+			continue
+		}
+		dst[out] = right[j]
+		out++
+		j++
+	}
+	for ; i < len(left); i++ {
+		dst[out] = left[i]
+		out++
+	}
+	for ; j < len(right); j++ {
+		dst[out] = right[j]
+		out++
+	}
+	return dst
+}
+
+func mergeManyGlobMatches(dst []string, streams [][]string) []string {
+	total := 0
+	queue := make(globMergeHeap, 0, len(streams))
+	for _, matches := range streams {
+		if len(matches) == 0 {
+			continue
+		}
+		total += len(matches)
+		queue = append(queue, globMergeItem{matches: matches})
+	}
+	if len(queue) == 0 {
+		return dst
+	}
+	if cap(dst)-len(dst) < total {
+		grown := make([]string, len(dst), len(dst)+total)
+		copy(grown, dst)
+		dst = grown
+	}
+	heap.Init(&queue)
+	for len(queue) > 0 {
+		item := heap.Pop(&queue).(globMergeItem)
+		dst = append(dst, item.matches[item.index])
+		item.index++
+		if item.index < len(item.matches) {
+			heap.Push(&queue, item)
+		}
+	}
+	return dst
+}
+
+func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir bool, matches []string) ([]string, error) {
+	state, err := cfg.newGlobState(base, "", nil)
+	if err != nil {
+		return matches, err
+	}
+	dirMatches, err := state.globDir(dir, matcher, wantDir, false, nil)
+	if err != nil {
+		return matches, err
+	}
+	for _, match := range dirMatches {
+		matches = append(matches, match.path)
+	}
+	return matches, nil
+}
+
+// ReadFields splits and returns n fields from s, like the "read" shell builtin.
+// If raw is set, backslash escape sequences are not interpreted.
+//
+// The config specifies shell expansion options; nil behaves the same as an
+// empty config.
+type ReadFieldChar struct {
+	Value   byte
+	Escaped bool
+}
+
+type readFieldSpan struct {
+	start int
+	end   int
+}
+
+func readFieldString(chars []ReadFieldChar, start, end int) string {
+	if start >= end {
+		return ""
+	}
+	buf := make([]byte, end-start)
+	for i := range buf {
+		buf[i] = chars[start+i].Value
+	}
+	return string(buf)
+}
+
+func readIFSClass(cfg *Config, chars []ReadFieldChar, start int) (ifsRuneType, int) {
+	if start >= len(chars) {
+		return ifsRuneNone, 0
+	}
+	if chars[start].Escaped {
+		return ifsRuneNone, 1
+	}
+	if chars[start].Value < utf8.RuneSelf {
+		return cfg.classifyIFSByte(chars[start].Value), 1
+	}
+
+	var buf [utf8.UTFMax]byte
+	buf[0] = chars[start].Value
+	n := 1
+	for n < utf8.UTFMax && start+n < len(chars) {
+		if chars[start+n].Escaped {
+			break
+		}
+		buf[n] = chars[start+n].Value
+		n++
+		if utf8.FullRune(buf[:n]) {
+			break
+		}
+	}
+	r, width := utf8.DecodeRune(buf[:n])
+	if r == utf8.RuneError && width == 1 {
+		return cfg.classifyIFSByte(chars[start].Value), 1
+	}
+	return cfg.classifyIFSRune(r), width
+}
+
+func trimReadLeadingIFSWhitespace(cfg *Config, chars []ReadFieldChar, start, end int) int {
+	for start < end {
+		class, width := readIFSClass(cfg, chars, start)
+		if class != ifsRuneWhitespace {
+			break
+		}
+		start += width
+	}
+	return start
+}
+
+func trimReadTrailingIFSWhitespace(cfg *Config, chars []ReadFieldChar, start, end int) int {
+	for end > start {
+		class, width := readIFSClass(cfg, chars, end-1)
+		if class != ifsRuneWhitespace || width != 1 {
+			break
+		}
+		end--
+	}
+	return end
+}
+
+func ReadFieldsFromChars(cfg *Config, chars []ReadFieldChar, n int) []string {
+	cfg = prepareConfig(cfg)
+	if n == 0 || len(chars) == 0 {
+		return nil
+	}
+
+	start := trimReadLeadingIFSWhitespace(cfg, chars, 0, len(chars))
+	end := trimReadTrailingIFSWhitespace(cfg, chars, start, len(chars))
+	if start >= end {
+		return nil
+	}
+
+	fields := make([]readFieldSpan, 0, 4)
+	fieldStart := start
+	for i := start; i < end; {
+		class, width := readIFSClass(cfg, chars, i)
+		if class == ifsRuneNone {
+			i += width
+			continue
+		}
+
+		fields = append(fields, readFieldSpan{start: fieldStart, end: i})
+		if class == ifsRuneWhitespace {
+			for i < end {
+				nextClass, nextWidth := readIFSClass(cfg, chars, i)
+				if nextClass != ifsRuneWhitespace {
+					break
+				}
+				i += nextWidth
+			}
+			if i < end {
+				nextClass, nextWidth := readIFSClass(cfg, chars, i)
+				if nextClass == ifsRuneNonWhitespace {
+					i += nextWidth
+					for i < end {
+						spaceClass, spaceWidth := readIFSClass(cfg, chars, i)
+						if spaceClass != ifsRuneWhitespace {
+							break
+						}
+						i += spaceWidth
+					}
+				}
+			}
+		} else {
+			i += width
+			for i < end {
+				spaceClass, spaceWidth := readIFSClass(cfg, chars, i)
+				if spaceClass != ifsRuneWhitespace {
+					break
+				}
+				i += spaceWidth
+			}
+		}
+		fieldStart = i
+	}
+	if fieldStart < end {
+		fields = append(fields, readFieldSpan{start: fieldStart, end: end})
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+
+	switch {
+	case n == -1 || len(fields) <= n:
+		out := make([]string, len(fields))
+		for i, field := range fields {
+			out[i] = readFieldString(chars, field.start, field.end)
+		}
+		return out
+	default:
+		out := make([]string, 0, n)
+		for i := 0; i < n-1; i++ {
+			field := fields[i]
+			out = append(out, readFieldString(chars, field.start, field.end))
+		}
+		last := fields[len(fields)-1]
+		combinedEnd := last.end
+		if last.start == last.end {
+			combinedEnd = end
+		}
+		out = append(out, readFieldString(chars, fields[n-1].start, combinedEnd))
+		return out
+	}
+}
+
+func ReadFields(cfg *Config, s string, n int, raw bool) []string {
+	chars := make([]ReadFieldChar, 0, len(s))
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		if !raw {
+			if escaped {
+				chars = append(chars, ReadFieldChar{Value: s[i], Escaped: true})
+				escaped = false
+				continue
+			}
+			if s[i] == '\\' {
+				escaped = true
+				continue
+			}
+		}
+		chars = append(chars, ReadFieldChar{Value: s[i]})
+	}
+	return ReadFieldsFromChars(cfg, chars, n)
+}

@@ -1,0 +1,606 @@
+package interp
+
+import (
+	"errors"
+	"io"
+	stdfs "io/fs"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/veypi/vsh/internal/commandutil"
+)
+
+const shellNamedFDStart = 10
+
+type readDeadliner interface {
+	SetReadDeadline(time.Time) error
+}
+
+type shellFDReadState struct {
+	mu         sync.Mutex
+	buffered   bool
+	bufferByte byte
+}
+
+// shellFD models one shell-visible file descriptor.
+//
+// Multiple descriptor numbers may point at the same shellFD so duplicated
+// descriptors share file position and any buffered read state.
+type shellFD struct {
+	reader   io.Reader
+	writer   io.Writer
+	closer   io.Closer
+	deadline readDeadliner
+	owned    bool
+
+	readState  *shellFDReadState
+	closed     bool
+	writeErr   error
+	writeErrMu sync.Mutex
+}
+
+func (fd *shellFD) Stat() (stdfs.FileInfo, error) {
+	if fd == nil {
+		return nil, errors.New("bad file descriptor")
+	}
+	type statter interface {
+		Stat() (stdfs.FileInfo, error)
+	}
+	if statter, ok := fd.reader.(statter); ok {
+		return statter.Stat()
+	}
+	if statter, ok := fd.writer.(statter); ok {
+		return statter.Stat()
+	}
+	if statter, ok := fd.closer.(statter); ok {
+		return statter.Stat()
+	}
+	return nil, errors.New("bad file descriptor")
+}
+
+func (fd *shellFD) RedirectPath() string {
+	if meta, ok := fd.reader.(commandutil.RedirectMetadata); ok {
+		return meta.RedirectPath()
+	}
+	if meta, ok := fd.writer.(commandutil.RedirectMetadata); ok {
+		return meta.RedirectPath()
+	}
+	if meta, ok := fd.closer.(commandutil.RedirectMetadata); ok {
+		return meta.RedirectPath()
+	}
+	return ""
+}
+
+func (fd *shellFD) RedirectFlags() int {
+	if meta, ok := fd.reader.(commandutil.RedirectMetadata); ok {
+		return meta.RedirectFlags()
+	}
+	if meta, ok := fd.writer.(commandutil.RedirectMetadata); ok {
+		return meta.RedirectFlags()
+	}
+	if meta, ok := fd.closer.(commandutil.RedirectMetadata); ok {
+		return meta.RedirectFlags()
+	}
+	return 0
+}
+
+func (fd *shellFD) RedirectOffset() int64 {
+	if meta, ok := fd.reader.(commandutil.RedirectMetadata); ok {
+		return meta.RedirectOffset()
+	}
+	if meta, ok := fd.writer.(commandutil.RedirectMetadata); ok {
+		return meta.RedirectOffset()
+	}
+	if meta, ok := fd.closer.(commandutil.RedirectMetadata); ok {
+		return meta.RedirectOffset()
+	}
+	return 0
+}
+
+func newShellInputFD(reader io.Reader) *shellFD {
+	return newShellInputFDWithOwnership(reader, false)
+}
+
+func newOwnedShellInputFD(reader io.Reader) *shellFD {
+	return newShellInputFDWithOwnership(reader, true)
+}
+
+func newShellInputFDWithOwnership(reader io.Reader, owned bool) *shellFD {
+	if reader == nil {
+		return &shellFD{}
+	}
+	fd := &shellFD{
+		reader:    reader,
+		owned:     owned,
+		readState: &shellFDReadState{},
+	}
+	if closer, ok := reader.(io.Closer); ok {
+		fd.closer = closer
+	}
+	if deadliner, ok := reader.(readDeadliner); ok {
+		fd.deadline = deadliner
+	}
+	return fd
+}
+
+func newShellOutputFD(writer io.Writer) *shellFD {
+	return &shellFD{writer: writer}
+}
+
+func newShellReadWriteFD(file io.ReadWriteCloser, readable, writable bool) *shellFD {
+	fd := &shellFD{closer: file, owned: true}
+	if readable {
+		fd.reader = file
+		fd.readState = &shellFDReadState{}
+	}
+	if writable {
+		fd.writer = file
+	}
+	if deadliner, ok := file.(readDeadliner); ok {
+		fd.deadline = deadliner
+	}
+	return fd
+}
+
+func (fd *shellFD) Read(p []byte) (int, error) {
+	if fd == nil || fd.reader == nil {
+		return 0, io.EOF
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if fd.readState != nil {
+		fd.readState.mu.Lock()
+		defer fd.readState.mu.Unlock()
+		if fd.readState.buffered {
+			p[0] = fd.readState.bufferByte
+			fd.readState.buffered = false
+			if len(p) == 1 {
+				return 1, nil
+			}
+			n, err := fd.reader.Read(p[1:])
+			return n + 1, err
+		}
+	}
+	return fd.reader.Read(p)
+}
+
+func (fd *shellFD) Write(p []byte) (int, error) {
+	if fd == nil || fd.writer == nil {
+		return 0, io.ErrClosedPipe
+	}
+	n, err := fd.writer.Write(p)
+	if err != nil {
+		fd.writeErrMu.Lock()
+		if fd.writeErr == nil {
+			fd.writeErr = err
+		}
+		fd.writeErrMu.Unlock()
+	}
+	return n, err
+}
+
+func (fd *shellFD) ReadByte() (byte, error) {
+	var buf [1]byte
+	n, err := fd.Read(buf[:])
+	if n > 0 {
+		return buf[0], nil
+	}
+	if err == nil {
+		err = io.EOF
+	}
+	return 0, err
+}
+
+func (fd *shellFD) PeekByte() (byte, error) {
+	if fd == nil || fd.reader == nil {
+		return 0, io.EOF
+	}
+	if fd.readState != nil {
+		fd.readState.mu.Lock()
+		defer fd.readState.mu.Unlock()
+		if fd.readState.buffered {
+			return fd.readState.bufferByte, nil
+		}
+		var buf [1]byte
+		n, err := fd.reader.Read(buf[:])
+		if n > 0 {
+			fd.readState.bufferByte = buf[0]
+			fd.readState.buffered = true
+			return buf[0], nil
+		}
+		if err == nil {
+			err = io.EOF
+		}
+		return 0, err
+	}
+	var buf [1]byte
+	n, err := fd.reader.Read(buf[:])
+	if n > 0 {
+		return buf[0], nil
+	}
+	if err == nil {
+		err = io.EOF
+	}
+	return 0, err
+}
+
+func (fd *shellFD) hasBufferedByte() bool {
+	if fd == nil || fd.readState == nil {
+		return false
+	}
+	fd.readState.mu.Lock()
+	defer fd.readState.mu.Unlock()
+	return fd.readState.buffered
+}
+
+func (fd *shellFD) UnderlyingReader() io.Reader {
+	if fd == nil {
+		return nil
+	}
+	return fd.reader
+}
+
+func (fd *shellFD) UnderlyingWriter() io.Writer {
+	if fd == nil {
+		return nil
+	}
+	return fd.writer
+}
+
+func (fd *shellFD) Seek(offset int64, whence int) (int64, error) {
+	if fd == nil {
+		return 0, errors.New("bad file descriptor")
+	}
+	type seeker interface {
+		Seek(offset int64, whence int) (int64, error)
+	}
+	seek := func(target seeker) (int64, error) {
+		if fd.readState != nil {
+			fd.readState.mu.Lock()
+			defer fd.readState.mu.Unlock()
+			adjusted := offset
+			if fd.readState.buffered && whence == io.SeekCurrent {
+				// PeekByte has already advanced the underlying descriptor by one byte.
+				adjusted--
+			}
+			position, err := target.Seek(adjusted, whence)
+			if err != nil {
+				return position, err
+			}
+			fd.readState.buffered = false
+			return position, nil
+		}
+		return target.Seek(offset, whence)
+	}
+	if seeker, ok := fd.reader.(seeker); ok {
+		return seek(seeker)
+	}
+	if seeker, ok := fd.writer.(seeker); ok {
+		return seek(seeker)
+	}
+	if seeker, ok := fd.closer.(seeker); ok {
+		return seek(seeker)
+	}
+	return 0, errors.New("bad file descriptor")
+}
+
+func (fd *shellFD) SetReadDeadline(t time.Time) error {
+	if fd == nil || fd.deadline == nil {
+		return nil
+	}
+	return fd.deadline.SetReadDeadline(t)
+}
+
+func (fd *shellFD) Close() error {
+	if fd == nil || fd.closed {
+		return nil
+	}
+	fd.closed = true
+	if fd.closer == nil {
+		return nil
+	}
+	return fd.closer.Close()
+}
+
+func cloneFDTable(src map[int]*shellFD) map[int]*shellFD {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[int]*shellFD, len(src))
+	for n, fd := range src {
+		dst[n] = fd
+	}
+	return dst
+}
+
+func forkFDTableForExec(src map[int]*shellFD) map[int]*shellFD {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[int]*shellFD, len(src))
+	clones := make(map[*shellFD]*shellFD, len(src))
+	for n, fd := range src {
+		if fd == nil {
+			dst[n] = nil
+			continue
+		}
+		if clone, ok := clones[fd]; ok {
+			dst[n] = clone
+			continue
+		}
+		clone := &shellFD{
+			reader:     fd.reader,
+			writer:     fd.writer,
+			closer:     fd.closer,
+			deadline:   fd.deadline,
+			owned:      false,
+			readState:  fd.readState,
+			closed:     false,
+			writeErr:   nil,
+			writeErrMu: sync.Mutex{},
+		}
+		clones[fd] = clone
+		dst[n] = clone
+	}
+	return dst
+}
+
+func initialFDTable(stdin StdinReader, stdout, stderr io.Writer) map[int]*shellFD {
+	return map[int]*shellFD{
+		0: newShellInputFD(stdin),
+		1: newShellOutputFD(stdout),
+		2: newShellOutputFD(stderr),
+	}
+}
+
+func (r *Runner) ensureFDTable() {
+	if r.fds != nil {
+		return
+	}
+	r.fds = initialFDTable(r.stdin, r.stdout, r.stderr)
+	r.fdsShared = false
+}
+
+func (r *Runner) ensureMutableFDTable() {
+	r.ensureFDTable()
+	r.fds = cloneMapOnWrite(r.fds, &r.fdsShared)
+}
+
+func (r *Runner) shareFDTableSnapshot(snapshot map[int]*shellFD) {
+	r.fds = snapshot
+	r.fdsShared = snapshot != nil
+	r.syncStandardFDs()
+}
+
+func (r *Runner) syncStandardFDs() {
+	r.ensureFDTable()
+
+	if fd := r.fds[0]; fd != nil && fd.reader != nil {
+		r.stdin = fd
+	} else {
+		r.stdin = nil
+	}
+
+	if fd := r.fds[1]; fd != nil && fd.writer != nil {
+		r.stdout = fd
+	} else {
+		if fd != nil {
+			r.stdout = fd
+		} else {
+			r.stdout = io.Discard
+		}
+	}
+
+	if fd := r.fds[2]; fd != nil && fd.writer != nil {
+		r.stderr = fd
+	} else {
+		if fd != nil {
+			r.stderr = fd
+		} else {
+			r.stderr = io.Discard
+		}
+	}
+}
+
+type standardFDUpdate struct {
+	stdin     StdinReader
+	stdout    io.Writer
+	stderr    io.Writer
+	setStdin  bool
+	setStdout bool
+	setStderr bool
+}
+
+func (r *Runner) replaceFDNoSync(fdNum int, fd *shellFD) {
+	old := r.fds[fdNum]
+	if fd == nil {
+		delete(r.fds, fdNum)
+	} else {
+		r.fds[fdNum] = fd
+	}
+	if old != nil && old != fd && old.owned && !r.fdReferencedElsewhere(fdNum, old) && !r.fdReferencedInSnapshots(old) {
+		_ = old.Close()
+	}
+}
+
+func (r *Runner) setStandardFDs(update standardFDUpdate) {
+	if update.setStdout && update.stdout == nil {
+		update.stdout = io.Discard
+	}
+	if update.setStderr && update.stderr == nil {
+		update.stderr = io.Discard
+	}
+	if update.setStdin {
+		r.stdin = update.stdin
+	}
+	if update.setStdout {
+		r.stdout = update.stdout
+	}
+	if update.setStderr {
+		r.stderr = update.stderr
+	}
+	if r.fds == nil {
+		return
+	}
+	r.ensureMutableFDTable()
+	if update.setStdin {
+		if update.stdin == nil {
+			delete(r.fds, 0)
+		} else {
+			r.fds[0] = newShellInputFD(update.stdin)
+		}
+	}
+	if update.setStdout {
+		r.fds[1] = newShellOutputFD(update.stdout)
+	}
+	if update.setStderr {
+		r.fds[2] = newShellOutputFD(update.stderr)
+	}
+	r.syncStandardFDs()
+}
+
+func (r *Runner) setStdinReader(in StdinReader) {
+	r.setStandardFDs(standardFDUpdate{stdin: in, setStdin: true})
+}
+
+func (r *Runner) setStdoutWriter(out io.Writer) {
+	r.setStandardFDs(standardFDUpdate{stdout: out, setStdout: true})
+}
+
+func (r *Runner) setStderrWriter(err io.Writer) {
+	r.setStandardFDs(standardFDUpdate{stderr: err, setStderr: true})
+}
+
+func (r *Runner) allocateFD() int {
+	return r.allocateFDFrom(shellNamedFDStart)
+}
+
+func (r *Runner) allocateFDFrom(start int) int {
+	r.ensureFDTable()
+	if start < shellNamedFDStart {
+		start = shellNamedFDStart
+	}
+	for fd := start; ; fd++ {
+		if _, ok := r.fds[fd]; !ok {
+			return fd
+		}
+	}
+}
+
+func (r *Runner) lookupNamedFD(name string) (int, error) {
+	val := r.envGet(name)
+	if val == "" {
+		return 0, errors.New("bad file descriptor")
+	}
+	fd, err := strconv.Atoi(val)
+	if err != nil || fd < 0 {
+		return 0, errors.New("bad file descriptor")
+	}
+	return fd, nil
+}
+
+func (fd *shellFD) clearWriteError() {
+	if fd == nil {
+		return
+	}
+	fd.writeErrMu.Lock()
+	fd.writeErr = nil
+	fd.writeErrMu.Unlock()
+}
+
+func (fd *shellFD) writeError() error {
+	if fd == nil {
+		return nil
+	}
+	fd.writeErrMu.Lock()
+	defer fd.writeErrMu.Unlock()
+	return fd.writeErr
+}
+
+func (r *Runner) setFD(fdNum int, fd *shellFD) {
+	r.ensureMutableFDTable()
+	r.replaceFDNoSync(fdNum, fd)
+	if fdNum >= 0 && fdNum <= 2 {
+		r.syncStandardFDs()
+	}
+}
+
+func (r *Runner) pushFDSnapshot(snapshot map[int]*shellFD) {
+	if snapshot == nil {
+		return
+	}
+	if r.fdSnapshots == nil {
+		r.fdSnapshots = r.fdSnapshotBootstrap[:0]
+	}
+	r.fdSnapshots = append(r.fdSnapshots, snapshot)
+}
+
+func (r *Runner) popFDSnapshot() {
+	if len(r.fdSnapshots) == 0 {
+		return
+	}
+	r.fdSnapshots = r.fdSnapshots[:len(r.fdSnapshots)-1]
+}
+
+func (r *Runner) closeUnusedSnapshotFDs(snapshot map[int]*shellFD) {
+	if len(snapshot) == 0 {
+		return
+	}
+	seen := make(map[*shellFD]struct{}, len(snapshot))
+	for _, fd := range snapshot {
+		if fd == nil || !fd.owned {
+			continue
+		}
+		if _, ok := seen[fd]; ok {
+			continue
+		}
+		seen[fd] = struct{}{}
+		if fdReferencedInTable(r.fds, fd) || r.fdReferencedInSnapshots(fd) {
+			continue
+		}
+		_ = fd.Close()
+	}
+}
+
+func (r *Runner) fdReferencedElsewhere(exclude int, target *shellFD) bool {
+	for fdNum, fd := range r.fds {
+		if fdNum == exclude {
+			continue
+		}
+		if fd == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) fdReferencedInSnapshots(target *shellFD) bool {
+	if target == nil {
+		return false
+	}
+	for _, snapshot := range r.fdSnapshots {
+		if fdReferencedInTable(snapshot, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func fdReferencedInTable(table map[int]*shellFD, target *shellFD) bool {
+	if target == nil {
+		return false
+	}
+	for _, fd := range table {
+		if fd == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) getFD(fdNum int) *shellFD {
+	r.ensureFDTable()
+	return r.fds[fdNum]
+}

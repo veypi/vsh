@@ -1,0 +1,183 @@
+package vsh_test
+
+import (
+	"context"
+	"io"
+	"os"
+	"testing"
+
+	"github.com/veypi/vsh"
+	gbfs "github.com/veypi/vsh/fs"
+)
+
+func TestSeededInMemoryFileSystemHelper(t *testing.T) {
+	t.Parallel()
+
+	rt, err := vsh.New(
+		vsh.WithFileSystem(vsh.SeededInMemoryFileSystem(gbfs.InitialFiles{
+			"/home/agent/lazy.txt": {
+				Lazy: func(context.Context) ([]byte, error) {
+					return []byte("seeded\n"), nil
+				},
+			},
+		})),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	result, err := rt.Run(context.Background(), &vsh.ExecutionRequest{
+		Script: "cat /home/agent/lazy.txt\n",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got, want := result.Stdout, "seeded\n"; got != want {
+		t.Fatalf("Stdout = %q, want %q", got, want)
+	}
+}
+
+func TestCustomFileSystemSupportsReusableTrieRoot(t *testing.T) {
+	t.Parallel()
+
+	rt, err := vsh.New(
+		vsh.WithFileSystem(vsh.CustomFileSystem(
+			gbfs.Reusable(gbfs.SeededTrie(gbfs.InitialFiles{
+				"/data/catalog/manifest.txt": {Content: []byte("dataset\n")},
+			})),
+			"/data",
+		)),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	result, err := rt.Run(context.Background(), &vsh.ExecutionRequest{
+		Script: "pwd\ncat /data/catalog/manifest.txt\nprintf 'scratch\\n' > /data/tmp.txt\ncat /data/tmp.txt\n",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got, want := result.Stdout, "/data\ndataset\nscratch\n"; got != want {
+		t.Fatalf("Stdout = %q, want %q", got, want)
+	}
+}
+
+func TestMountableFileSystemSupportsShellMvAcrossMounts(t *testing.T) {
+	t.Parallel()
+
+	rt, err := vsh.New(
+		vsh.WithFileSystem(vsh.MountableFileSystem(vsh.MountableFileSystemOptions{
+			Mounts: []gbfs.MountConfig{
+				{MountPoint: "/src", Factory: seededFactory(map[string]string{"/dir/a.txt": "a\n"})},
+				{MountPoint: "/dst", Factory: gbfs.Memory()},
+			},
+		})),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	result, err := rt.Run(context.Background(), &vsh.ExecutionRequest{
+		Script: "mv /src/dir /dst/copied\ncat /dst/copied/a.txt\n",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0, stderr=%q", result.ExitCode, result.Stderr)
+	}
+	if got, want := result.Stdout, "a\n"; got != want {
+		t.Fatalf("Stdout = %q, want %q", got, want)
+	}
+}
+
+func TestMountableFileSystemSupportsTrieDatasetMount(t *testing.T) {
+	t.Parallel()
+
+	rt, err := vsh.New(
+		vsh.WithFileSystem(vsh.MountableFileSystem(vsh.MountableFileSystemOptions{
+			Base: gbfs.Memory(),
+			Mounts: []gbfs.MountConfig{
+				{
+					MountPoint: "/dataset",
+					Factory: gbfs.Reusable(gbfs.SeededTrie(gbfs.InitialFiles{
+						"/docs/guide.txt": {Content: []byte("guide\n")},
+					})),
+				},
+				{MountPoint: "/scratch", Factory: gbfs.Memory()},
+			},
+			WorkingDir: "/scratch",
+		})),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	result, err := rt.Run(context.Background(), &vsh.ExecutionRequest{
+		Script: "pwd\ncat /dataset/docs/guide.txt\nprintf 'note\\n' > /scratch/log.txt\ncat /scratch/log.txt\n",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got, want := result.Stdout, "/scratch\nguide\nnote\n"; got != want {
+		t.Fatalf("Stdout = %q, want %q", got, want)
+	}
+}
+
+func TestSessionFileSystemProvidesLiveSandboxAccess(t *testing.T) {
+	t.Parallel()
+
+	rt, err := vsh.New(
+		vsh.WithFileSystem(vsh.MountableFileSystem(vsh.MountableFileSystemOptions{
+			Mounts: []gbfs.MountConfig{
+				{MountPoint: "/src", Factory: gbfs.Memory()},
+				{MountPoint: "/dynamic", Factory: gbfs.Memory()},
+			},
+		})),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	session, err := rt.NewSession(context.Background())
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
+
+	if err := writeFSFile(context.Background(), session.FileSystem(), "/dynamic/note.txt", "hi\n"); err != nil {
+		t.Fatalf("writeFSFile(/dynamic/note.txt) error = %v", err)
+	}
+
+	result, err := session.Exec(context.Background(), &vsh.ExecutionRequest{
+		Script: "cat /dynamic/note.txt\n",
+	})
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if got, want := result.Stdout, "hi\n"; got != want {
+		t.Fatalf("Stdout = %q, want %q", got, want)
+	}
+}
+
+func seededFactory(files map[string]string) gbfs.Factory {
+	return gbfs.FactoryFunc(func(ctx context.Context) (gbfs.FileSystem, error) {
+		mem := gbfs.NewMemory()
+		for name, contents := range files {
+			if err := writeFSFile(ctx, mem, name, contents); err != nil {
+				return nil, err
+			}
+		}
+		return mem, nil
+	})
+}
+
+func writeFSFile(ctx context.Context, fsys gbfs.FileSystem, name, contents string) error {
+	file, err := fsys.OpenFile(ctx, name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	_, err = io.WriteString(file, contents)
+	return err
+}

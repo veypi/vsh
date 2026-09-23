@@ -1,0 +1,1730 @@
+{
+  "suites": {
+    "bash": {
+      "entries": {
+        "oils/alias.test.sh::Alias that is && || ;": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/alias.test.sh::Alias that is pipeline": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/alias.test.sh::alias with word of multiple lines": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/alias.test.sh::Two aliases in pipeline": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/alias.test.sh::unalias -a": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/array-assign.test.sh::More fragments like a[  a[5  a[5 +  a[5 + 3]": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/array-assign.test.sh::Multiple LHS array words": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/brace-expansion.test.sh::Tilde expansion come before var expansion": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/bugs.test.sh::#2640 Hanging when reading from character devices": {
+          "mode": "xfail",
+          "reason": "conformance: Darwin bash oracle lacks GNU coreutils timeout for this character-device regression",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-cd.test.sh::chdir is a synonym for cd - busybox ash": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/builtin-cd.test.sh::Survey of getcwd() syscall": {
+          "mode": "skip",
+          "reason": "platform-specific: test requires strace (Linux-only) and syscall behavior varies by platform"
+        },
+        "oils/builtin-completion.test.sh::compgen -A user": {
+          "mode": "skip",
+          "reason": "platform-specific: vsh uses sandbox-visible passwd data instead of the host account database"
+        },
+        "oils/builtin-completion.test.sh::compgen -f -X filter -- $cur": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-completion.test.sh::compgen -W words -X filter": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-completion.test.sh::compgen doesn't respect -X for user-defined functions": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-getopts.test.sh::OPTIND narrowed down": {
+          "mode": "xfail",
+          "reason": "conformance: current spec expectation conflicts with the neighboring getopts state-tracking cases",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/builtin-meta.test.sh::command -v doesn't find executable dir": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-misc.test.sh::time pipeline": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-process.test.sh::arg that would overflow 64 bits is detected": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::Changing resource limit is denied": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::exec -- 2>&1": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::exec -a sets argv[0]": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::exec builtin accepts --": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::exec builtin with here doc": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage still expects a spec/bin helper path our harness does not mirror yet",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/builtin-process.test.sh::Exit builtin with invalid arg": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::Exit builtin with too many args": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::time with brace group argument": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit -f 1 prevents files larger 512 bytes": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit -n limits file descriptors": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit -S for soft limit (default), -H for hard limit": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit accepts 'unlimited'": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit doesn't accept multiple flags - reduce confusion between shells": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit negative arg": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit negative flag": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit of 2**32, 2**31 (int overflow)": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit that is 64 bits": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit too many args": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::ulimit with no flags is like -f": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-process.test.sh::write big file with ulimit": {
+          "mode": "skip",
+          "reason": "vsh does not implement process tables"
+        },
+        "oils/builtin-read.test.sh::read bash bug": {
+          "mode": "skip",
+          "reason": "intentional: vsh keeps the space-preserving result instead of reproducing bash's historical control-character bug"
+        },
+        "oils/builtin-set.test.sh::set -u with undefined var in interactive shell does NOT exit the interpreter": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-set.test.sh::set -u with undefined variable exits the interpreter": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-times.test.sh::times shows two formatted lines": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-trap-bash.test.sh::trap DEBUG and pipeline (lastpipe difference)": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-trap-err.test.sh::trap ERR with YSH proc": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/builtin-trap-err.test.sh::trap ERR with redirect": {
+          "mode": "xfail",
+          "reason": "conformance: current spec expectation differs from bash-compatible redirect ERR line accounting",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/builtin-trap.test.sh::Remove trap with an unsigned integer": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/builtin-trap.test.sh::trap USR1, sleep, SIGINT: non-interactively": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-trap.test.sh::trap with command.NoOp - check internal invariant": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-trap.test.sh::traps are not active inside subshells $() ()  trap | cat": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-type-bash.test.sh::type -a -> builtin": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-type-bash.test.sh::type -ap -> builtin": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-type-bash.test.sh::type -P builtin -> not a file": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-type-bash.test.sh::type -P builtin -> not a file but file found": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/builtin-type-bash.test.sh::type -P does not find directories (regression)": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/command_.test.sh::Command block": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/divergence.test.sh::builtin cat crashes a subshell (#2530)": {
+          "mode": "xfail",
+          "reason": "conformance: Darwin bash oracle lacks /usr/bin/cat inside this harness",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/errexit-osh.test.sh::command sub with command_sub_errexit only": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/errexit-osh.test.sh::command sub: errexit is NOT inherited and outer shell keeps going": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/errexit-osh.test.sh::command_sub_errexit and command sub in array": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/errexit-osh.test.sh::command_sub_errexit causes local d=$(date %x) to fail": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/errexit-osh.test.sh::global assignment with command sub: middle command fails": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/errexit-osh.test.sh::if pipeline doesn't fail fatally": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/errexit-osh.test.sh::local: middle command fails and keeps going": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/errexit-osh.test.sh::What's in strict:all?": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/errexit.test.sh::More && ||": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/extglob-files.test.sh::no match": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/fatal-errors.test.sh::Unrecoverable: divide by zero in case": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/fatal-errors.test.sh::Unrecoverable: divide by zero in conditional word": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/fatal-errors.test.sh::Unrecoverable: divide by zero in redirect word": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/glob.test.sh::Glob ordering respects LC_COLLATE (zsh respects this too)": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "linux"
+          ]
+        },
+        "oils/globignore.test.sh::Ignore globs with char patterns like [!ab]": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/globignore.test.sh::When GLOBIGNORE is set, no_dash_glob isn't respected": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/globstar.test.sh::in zsh, ***/ follows symlinked directories, while **/ does not": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/parse-errors.test.sh::interactive parse error (regression)": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/parse-errors.test.sh::Long Token - 65535 bytes": {
+          "mode": "xfail",
+          "reason": "conformance: Darwin wc still differs from GNU bash harness behavior for this case",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/parse-errors.test.sh::Token that's too long for Oils - 65536 bytes": {
+          "mode": "xfail",
+          "reason": "conformance: Darwin wc still differs from GNU bash harness behavior for this case",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/pipeline.test.sh::Evaluation of argv[0] in pipeline occurs in child": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/pipeline.test.sh::Nested pipelines": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/pipeline.test.sh::Pipeline in eval": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/pipeline.test.sh::Redirect in Pipeline": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/pipeline.test.sh::shopt -s lastpipe and shopt -s no_last_fork interaction": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/posix.test.sh::Newlines in compound lists": {
+          "mode": "skip",
+          "reason": "conformance: backgrounded missing-file stderr ordering in this case is unstable across bash oracles and hosts"
+        },
+        "oils/redirect-command.test.sh::Brace group redirect": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/redirect-command.test.sh::redirect bash extensions:   [[  ((  for ((": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/redirect-multi.test.sh::ysh behavior when glob doesn't match": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/redirect.test.sh::Redirect echo to stderr, and then redirect all of stdout somewhere.": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/regex.test.sh::Operator chars ; & but not |": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/regex.test.sh::Unquoted { is a regex parse error": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/sh-options-bash.test.sh::OSH calling bash with SHELLOPTS does not change braceexpand": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/smoke.test.sh::failed command": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/smoke.test.sh::Here doc with redirect": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/smoke.test.sh::pipeline": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/smoke.test.sh::pipeline with builtin": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/tilde.test.sh::~ expansion in readonly assignment": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/tilde.test.sh::No tilde expansion in word that looks like assignment but isn't": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/tilde.test.sh::strict tilde": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/toysh-posix.test.sh::Command Sub Syntax Error": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/toysh-posix.test.sh::dynamic glob - http://landley.net/notes.html#08-05-2020": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/toysh-posix.test.sh::Evaluation order of redirect and ${undef?error}": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/toysh-posix.test.sh::Failed redirect in assignment, vs. export": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/toysh.test.sh::{abc}<<< - http://landley.net/notes-2019.html#09-12-2019": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/toysh.test.sh::Brace Expansion": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/toysh.test.sh::char class / extglob": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/toysh.test.sh::extglob $IFS 1": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/toysh.test.sh::extglob $IFS 2": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/unicode.test.sh::OSH source code doesn't have to be valid Unicode (like other shells)": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/vars-bash.test.sh::$SHELL is set to what is in /etc/passwd": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/vars-special.test.sh::$HOME is NOT set": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/vars-special.test.sh::Vars set interactively only: $HISTFILE": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/ysh-builtin-private.test.sh::builtin cat usage": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/ysh-builtin-private.test.sh::builtin rm -f - still fails when file can't be removed": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/ysh-builtin-private.test.sh::builtin rm always fails on directories (regardless of -f)": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/ysh-builtin-private.test.sh::builtin rm: usage, removing files": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior differs from bash",
+          "goos": [
+            "darwin"
+          ]
+        },
+        "oils/ysh-builtin-private.test.sh::builtin sleep behaves like external sleep": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/ysh-builtin-private.test.sh::sleep without prefix is still external": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/zsh-idioms.test.sh::asdf snippet": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/zsh-idioms.test.sh::git-completion snippet": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        },
+        "oils/zsh-idioms.test.sh::zsh var sub is rejected at runtime": {
+          "mode": "xfail",
+          "reason": "conformance: restored upstream bash coverage exposes vsh behavior that still differs from bash",
+          "goos": [
+            "darwin",
+            "linux"
+          ]
+        }
+      }
+    },
+    "dash": {
+      "entries": {
+        "oils/alias.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/arg-parse.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/arith-dynamic.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/arith.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/assign.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/ble-features.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/ble-unset.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/blog1.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/blog2.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/bool-parse.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/bugs.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-bracket.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-cd.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-echo.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-eval-source.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-getopts.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-meta-assign.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-meta.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-misc.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-printf.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-process.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-set.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-special.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-trap.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-type.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-umask.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/builtin-vars.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/case_.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/command-parsing.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/command-sub.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/command_.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/divergence.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/empty-bodies.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/errexit-osh.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/errexit.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/exit-status.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/explore-parsing.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/fatal-errors.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/func-parsing.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/glob.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/here-doc.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/if_.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/known-differences.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/loop.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/nul-bytes.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/paren-ambiguity.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/parse-errors.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/pipeline.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/posix.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/quote.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/redirect-command.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/redirect.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/sh-func.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/smoke.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash",
+          "goos": ["darwin"]
+        },
+        "oils/strict-options.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/tilde.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/toysh-posix.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/var-op-len.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/var-op-strip.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/var-op-test.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/var-sub-quote.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/var-sub.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/vars-bash.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/vars-special.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/whitespace.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/word-eval.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/word-split.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/xtrace.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh sh behavior still differs from dash"
+        },
+        "oils/redirect.test.sh::<> for read/write named pipes": {
+          "mode": "skip",
+          "reason": "conformance: dash oracle hangs on this named-pipe read/write case under the harness"
+        }
+      }
+    },
+    "mksh": {
+      "entries": {
+        "oils/alias.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/append.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/arg-parse.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/arith-context.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/arith-dynamic.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/arith.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/array-assign.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/array-compat.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/array-sparse.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/array.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/assign-deferred.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/assign-dialects.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/assign-extended.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/assign.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/ble-features.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/ble-idioms.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/ble-unset.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/blog1.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/blog2.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/bool-parse.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/brace-expansion.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/bugs.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-bracket.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-cd.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-echo.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-eval-source.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-getopts.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-meta-assign.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-meta.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-misc.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-printf.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-process.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-read.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-set.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-special.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-trap-err.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-trap.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-type.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-umask.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/builtin-vars.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/case_.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/command-parsing.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/command-sub.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/command_.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/dbracket.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/divergence.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/dparen.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/empty-bodies.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/errexit-osh.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/errexit.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/exit-status.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/explore-parsing.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/extglob-files.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/extglob-match.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/fatal-errors.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/func-parsing.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/glob.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/here-doc.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/if_.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/known-differences.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/let.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/loop.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/nameref.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/nul-bytes.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/paren-ambiguity.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/parse-errors.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/pipeline.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/posix.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/quote.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/redirect-command.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/redirect-multi.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/redirect.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/serialize.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/sh-func.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/smoke.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh",
+          "goos": ["darwin"]
+        },
+        "oils/strict-options.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/temp-binding.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/tilde.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/toysh-posix.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/toysh.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/unicode.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/var-op-len.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/var-op-patsub.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/var-op-slice.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/var-op-strip.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/var-op-test.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/var-sub-quote.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/var-sub.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/vars-bash.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/vars-special.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/whitespace.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/word-split.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/xtrace.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        },
+        "oils/zsh-idioms.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from mksh"
+        }
+      }
+    },
+    "zsh": {
+      "entries": {
+        "oils/alias.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/append.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/arg-parse.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/arith-context.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/arith-dynamic.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/arith.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/array-assign.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/array-basic.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/assign.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/ble-features.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/ble-idioms.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/ble-unset.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/blog1.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/blog2.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/bool-parse.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/brace-expansion.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/bugs.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-cd.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-dirs.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-echo.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-eval-source.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-meta-assign.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-meta.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-misc.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-printf.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-process.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-read.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-set.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-special.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-times.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh",
+          "goos": ["darwin"]
+        },
+        "oils/builtin-type.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-umask.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/builtin-vars.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/case_.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/command_.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/divergence.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/dparen.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/empty-bodies.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/fatal-errors.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/for-expr.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/globstar.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/if_.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/known-differences.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/let.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/loop.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/nul-bytes.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/paren-ambiguity.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/pipeline.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/redirect-command.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/redirect-multi.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/regex.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/serialize.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/tilde.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/toysh-posix.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/unicode.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/var-op-len.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/var-op-patsub.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/var-op-slice.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/var-op-strip.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/var-op-test.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/vars-bash.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/vars-special.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/whitespace.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        },
+        "oils/zsh-idioms.test.sh": {
+          "mode": "xfail",
+          "reason": "conformance: vsh behavior still differs from zsh"
+        }
+      }
+    },
+    "curl": {
+      "entries": {}
+    }
+  }
+}
