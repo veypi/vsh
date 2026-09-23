@@ -91,3 +91,20 @@ pod 侧 fsauth/netauth 从「后命中者胜（last-wins）」反转为「首命
   （gojq 错误消息列号漂移），非 fork 引入。
 - `examples/` 模块构建：依赖 grpc 测试数据含 `.key` 文件，沙箱禁止解压写入——
   无沙箱环境或预填模块缓存后可构建。根模块 + 10 个 contrib 模块构建全绿。
+
+## Session.Exec 串行化与单命令死循环防线（2026-09-24 实测定案）
+
+`internal/runtime/session.go`：`Session.Exec` 对整个执行持有 `s.mu`——同会话串行。
+**fork 内不改**（并发 shell 共享 env/cwd/fd 语义混乱，上游有意如此）；缺口在 glue
+（aic-pod libs/vsh）两层化解：
+
+1. `bg run` 走派生会话（`sid#bg-*`）——不与前台互等（同会话 bg 会死锁）。
+2. **管理面快路径**：纯 `bg list/wait/kill/output`（或裸 bg）单命令脚本路由派生会话
+   （`sid#mgmt-*`，`isPureBGMgmtScript` 保守判定：单语句/全字面量/无重定向管道）。
+   实测漏洞：前台长任务超时转 bg 后仍持基会话锁，救场的 `bg kill` 排在锁后到不了
+   执行层，会话活锁至 30min 墙钟。`bg run` 刻意排除（cwd 继承依赖基会话 FS 状态）。
+
+单命令死循环（`yes > /dev/null` 类）防线边界：解释器 limits（MaxCommandCount 等）
+只在命令间触发，管不到单个命令内部；兜底 = TaskTable 30min 墙钟（到期 124）+
+bounded output。命令级 CPU 硬上限不可行（Go 无 per-goroutine CPU 计量；墙钟会误杀
+合法 `sleep`）——维持 30min 有界 + 管理面可杀的设计。
