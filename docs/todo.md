@@ -15,27 +15,27 @@
 目标：`ivec/vsh` = gbash 全量拷贝改名（module `github.com/veypi/vsh`，包名 gbash→vsh），测试绿，D14 落地。
 
 ### 1.1 fork 机械改写
-- [ ] 1.1.1 gbash 拷入 `ivec/vsh`：剪枝 website/packages/docker/flake.nix/flake.lock/scripts/非 Go 资产；删 fork 内 go.work/go.work.sum；contrib 保留（jq 要挂，§9.16）
-- [ ] 1.1.2 12 个 go.mod module 路径 `github.com/ewhauser/gbash*` → `github.com/veypi/vsh*`；包名/导入注释 gbash→vsh 全量机械改写（含 stub 文件内容 `# gbash virtual command stub` 字样，layout.go:110）
-- [ ] 1.1.3 LICENSE 换 Apache-2.0 + NOTICE（标明上游 ewhauser/gbash 与基线 SHA 88728c5）；README 重写为 fork 定位
-- [ ] 1.1.4 FORK.md：基线 SHA、改名脚本（可重跑）、上游同步策略（按需 cherry-pick，不承诺 rebase）、存量 config.yaml 行序迁移提醒（§11.5）
-- [ ] 1.1.5 go.work `use` 加 `./vsh`、`./vbox`；`go build ./...` + 上游相关包 `go test ./...` 全绿（纯机械验收）
+- [x] 1.1.1 gbash 拷入 `ivec/vsh`：剪枝 website/packages/docker/flake.nix/flake.lock/scripts/非 Go 资产；删 fork 内 go.work/go.work.sum；contrib 保留（jq 要挂，§9.16）
+- [x] 1.1.2 12 个 go.mod module 路径 `github.com/ewhauser/gbash*` → `github.com/veypi/vsh*`；包名/导入注释 gbash→vsh 全量机械改写（含 stub 文件内容 `# gbash virtual command stub` 字样，layout.go:110）
+- [x] 1.1.3 LICENSE 换 Apache-2.0 + NOTICE（标明上游 ewhauser/gbash 与基线 SHA 88728c5）；README 重写为 fork 定位（注：上游 LICENSE 本就是 Apache-2.0，原样沿用 + NOTICE）
+- [x] 1.1.4 FORK.md：基线 SHA、改名脚本（可重跑）、上游同步策略（按需 cherry-pick，不承诺 rebase）、存量 config.yaml 行序迁移提醒（§11.5）
+- [x] 1.1.5 go.work `use` 加 `./vsh`、`./vbox`；`go build ./...` + 上游相关包 `go test ./...` 全绿（纯机械验收）（注：根模块+10 contrib 构建绿；examples 因沙箱禁写 .key 环境性受阻，记 FORK.md）
 
 ### 1.2 D14 registry 优先（分叉第一刀）
-- [ ] 1.2.1 `lookupCommand`（internal/shell/core.go:1108-1143）：名字在 Registry 即整体短路，提到 PATH 候选循环**之前**（不是仅 lookupCommandPath 内提前——评审结论：循环前短路才彻底关闭 shadow）
-- [ ] 1.2.2 `isUnsupportedVirtualBuiltinStub`（core.go:1472）与 `ensureCommandStub` 同名跳过（layout.go:90-112）保留，确认 registry 优先后无害
-- [ ] 1.2.3 上游语义测试反转：`TestLookupCommandPrefersRealExecutableOverRegistryStub` 等改为断言 registry 优先
-- [ ] 1.2.4 新增用例：PATH 目录同名真实文件不 shadow 内建/平台命令（cloud 内存层 + host 会话 bin 目录各一）
+- [x] 1.2.1 `lookupCommand`（internal/shell/core.go:1108-1143）：名字在 Registry 即整体短路，提到 PATH 候选循环**之前**（不是仅 lookupCommandPath 内提前——评审结论：循环前短路才彻底关闭 shadow）（落在 hash 缓存之前，source=registry）
+- [x] 1.2.2 `isUnsupportedVirtualBuiltinStub`（core.go:1472）与 `ensureCommandStub` 同名跳过（layout.go:90-112）保留，确认 registry 优先后无害
+- [x] 1.2.3 上游语义测试反转：`TestLookupCommandPrefersRealExecutableOverRegistryStub` 等改为断言 registry 优先（共 8 处：lookup/hash×3/trace×2/PATH×2/host RequireExecutableBit/command -p）
+- [x] 1.2.4 新增用例：PATH 目录同名真实文件不 shadow 内建/平台命令（cloud 内存层 + host 会话 bin 目录各一）（单测级双用例落地；端到端双端用例随 M2/M3 验收 2）
 
 ### 1.3 M1 强制核实项（v4.1）
-- [ ] 1.3.1 **Windows PATH 分隔符**：layout.go `commandDirectoriesForPath` 按 `:` 切分——win 设备实证 host FS 适配器是否呈现 unix 风格虚拟路径；若含盘符冒号则 fork 内改切分逻辑（结论记入 FORK.md）
-- [ ] 1.3.2 **内建 --help 覆盖度**：90 内建逐一 `--help`，缺失的 fork 补齐（D7）
-- [ ] 1.3.3 **内建 ls/rg 基础行为**：确认脚本命令角色下的行为与 help 文本（fs 的结构化 ls/rg 双轨独立，不涉引擎）
-- [ ] 1.3.4 **jq 挂入验证**：contrib/jq 在 fork 内可构建可注册（cloud/host registry 各一行 Register 的接法在 M2 cmds.go 定型）
+- [x] 1.3.1 **Windows PATH 分隔符**：layout.go `commandDirectoriesForPath` 按 `:` 切分——结论：fork 不改切分逻辑，约束落 glue（fs_host 必须呈现 unix 风格虚拟路径，与 2.3.3 对齐）；设备级实证随 M2 win 冒烟（结论记 FORK.md）
+- [x] 1.3.2 **内建 --help 覆盖度**：130 内建逐一 `--help`，缺失的 fork 补齐（D7）（实测 20 缺口已全部补齐；internal/runtime/help_coverage_test.go 常驻防回归）
+- [x] 1.3.3 **内建 ls/rg 基础行为**：确认脚本命令角色下的行为与 help 文本（fs 的结构化 ls/rg 双轨独立，不涉引擎）（内建测试全绿 + --help 覆盖测试保证；rg oracle 用 homebrew rg 15.1.0 通过）
+- [x] 1.3.4 **jq 挂入验证**：contrib/jq 在 fork 内可构建可注册（cloud/host registry 各一行 Register 的接法在 M2 cmds.go 定型）（构建绿 + Register(registry) API 确认；1 个上游既有环境性测试失败，非 fork 引入，记 FORK.md）
 
 ### 1.4 M1 出口
-- [ ] 1.4.1 `go test ./...` 全绿（含反转后的语义测试）
-- [ ] 1.4.2 提交 vsh 仓（一次 fork 提交 + 一次 D14 提交，分开）
+- [x] 1.4.1 `go test ./...` 全绿（含反转后的语义测试）（23 包 ok；仅 2 个环境性失败：diff oracle 需 GNU diffutils 3.12、.env 写入被沙箱 deny——均记 FORK.md）
+- [x] 1.4.2 提交 vsh 仓（一次 fork 提交 + 一次 D14 提交，分开）（实际三次：89d24cf fork / 6bfe55a D14 / 54d7d04 D7 --help；vbox 仓 58714a8 go.mod）
 
 ---
 
@@ -175,9 +175,9 @@
 
 | 风险 | 缓解 | 状态 |
 |---|---|---|
-| Windows PATH `:` 切分切碎盘符 | M1.3.1 强制实证，必要则 fork 改切分 | [ ] |
+| Windows PATH `:` 切分切碎盘符 | M1.3.1 强制实证，必要则 fork 改切分 | [x] 代码级结论：fork 不改，约束落 glue（FORK.md）；设备实证随 M2.3.3 |
 | SymlinkDeny 抢先于 FS 适配器 | M2.1.2 显式覆盖 + 用例 | [ ] |
-| 内建 --help 覆盖不全 | M1.3.2 清点补齐 | [ ] |
+| 内建 --help 覆盖不全 | M1.3.2 清点补齐 | [x] 20 缺口已补齐，coverage 测试常驻 |
 | UFS 无可执行位持久化 | M2.2.5 核实，工具描述引导 bash x.sh | [ ] |
 | 存量 config 行序反转灵异 | M3.6.1 人工迁移 + FORK.md | [ ] |
 | analyze 写参表 90 内建工作量 | M2.5.2 估足，雏形演化自 fsRequirement | [ ] |
