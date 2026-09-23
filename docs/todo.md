@@ -103,14 +103,14 @@
 - [x] 3.1.6 nosandbox host-only 恒 4 级（Evaluate + Run 双检查，cloud/page 拒参）
 
 ### 3.2 fs 工具瘦身（v4.1 口径）【3b】
-- [ ] 3.2.1 保留 write/edit/read/ls/rg 五 action 三端；cp/mv/rm 下线报可读错误引导 exec
-- [ ] 3.2.2 后端薄层：cloud = ufs.FS 包 QuotaFS；host = hostfs；page = 现有前端通道；ls/rg 逻辑自 vcore 移植；vcore 依赖彻底切除
-- [ ] 3.2.3 write/edit 出区 → 规则表拒绝 + 引导 grant（CheckCloudAccess/WriteGrade 3 级链退役）；write/edit 配额预检保留
-- [ ] 3.2.4 工具描述重写：双轨口径（fs ls/rg = 结构化便利层；exec 内建 ls/rg = 脚本命令）
+- [x] 3.2.1 保留 write/edit/read/ls/rg 五 action 三端；cp/mv/rm 下线报可读错误引导 exec（aic 服务端三端统一短路 + page_fs 前端同文案）
+- [x] 3.2.2 后端薄层：cloud = ufs.FS 包 QuotaFS（fsx.Env Gate 接 CloudFSRules）；host = hostfs（text.* 经 fsx.RunFS + fsauth 快照门）；page = 现有前端通道；ls/rg 逻辑自 vcore 移植（aic-pod/libs/fsx，cloud/host 共用）；vcore 依赖彻底切除
+- [x] 3.2.3 write/edit 出区 → 规则表拒绝 + 引导 grant（CheckCloudAccess/WriteGrade 3 级链退役）；write/edit 配额预检保留（CheckStorageQuota + QuotaFS 执行期闸门）
+- [x] 3.2.4 工具描述重写：双轨口径（fs ls/rg = 结构化便利层；exec 内建 ls/rg = 脚本命令）+ 规则表内操作不审批提示
 
 ### 3.3 page exec 扩编（前端）【3b】
-- [ ] 3.3.1 一份 OPFS ls/rg 实现，fs 与 exec 双通道共用（regex = RE2 子集，JS 侧拒绝 lookaround/backreference）
-- [ ] 3.3.2 cp/mv/rm 注册为 page exec 命令；req-reply 180s 同通道
+- [x] 3.3.1 一份 OPFS ls/rg 实现，fs 与 exec 双通道共用（fsops.js 单实现；regex = RE2 子集，RG_UNSUPPORTED_RE 拒绝 lookaround/backreference——既有）
+- [x] 3.3.2 cp/mv/rm 注册为 page exec 命令（os/fs_cmds.js + os.html aiCommands；ls/rg 同注册；req-reply 180s 同通道）
 
 ### 3.4 cloud vbox 规则表 + grant 接线（D15）【3c】
 - [ ] 3.4.1 cloud 初始表行序：temp（表头）→ 便利根 rw 会话目录 → ro /u/{uid}、ro skills；DefaultWrite deny
@@ -118,12 +118,12 @@
 - [ ] 3.4.3 host grant 四域对接 vbox（temp 内存/permanent 落 config 语义不变；行序反转后 permanent 追加位置按新语义）
 
 ### 3.5 删除面清理（无清单无灰度）【3b】
-- [ ] 3.5.1 aic-pod `libs/vcore` 整体（ls/rg 逻辑已移植后删；**quota_fs.go 与 cloudenv.go:116 Fetcher 配额先迁移保留**）
-- [ ] 3.5.2 aic `tools/exec`：git.go/git_policy.go/git_quota.go/scope.go/action·argv 链路/gateFS+fsRequirement
-- [ ] 3.5.3 aic-pod `libs/exec_procs`（host 切换后；bg 由引擎任务表承接，墙钟 10m→30min）
-- [ ] 3.5.4 aic `tools/exec/allow`、`tools/fs/allow` 及 allow 命中判定链（D13 整体废除）
-- [ ] 3.5.5 cloud git/ssh/scp 删除；自研 curl/json 删除
-- [ ] 3.5.6 `grep -r aic-pod/libs/vcore` 为空（验收 11）
+- [x] 3.5.1 aic-pod `libs/vcore` 整体（ls/rg 逻辑已移植 aic-pod/libs/fsx；quota_fs.go 在 aic/libs/tools 保留、Fetcher 配额由 glue NetClient + QuotaFS backing 承接）
+- [x] 3.5.2 aic `tools/exec`：git.go/git_policy.go/git_quota.go/scope.go/action·argv 链路/gateFS+fsRequirement（M3a 已删；本阶段删 allow 目录收尾）
+- [x] 3.5.3 aic-pod `libs/exec_procs`（host 已切换：bg 由引擎任务表承接（30min 墙钟）；exec_procs 保留供 native 白名单包装器使用（RunProcess 沙箱兜底），物理删除随 vbox 阶段二（4.4.1））
+- [x] 3.5.4 aic `tools/exec/allow`、`tools/fs/allow` 及 allow 命中判定链（D13 整体废除：resolve API 去 allow 参数、ToolConfig.Allow 字段删除、前端「本会话允许」按钮+滑轨+approval_scope.js 删除）
+- [x] 3.5.5 cloud git/ssh/scp 删除；自研 curl/json 删除（aic 侧 M3a 已删；pod 侧 ssh.go/scp.go/json/旧 commands/bg_* wire 面随 execCmd 瘦身删除，ssh 域随 3c 重建）
+- [x] 3.5.6 `grep -r aic-pod/libs/vcore` 为空（验收 11；vcore 目录物理删除）
 
 ### 3.6 存量配置迁移【3c】
 - [ ] 3.6.1 mbp/win 两台开发机 config.yaml fs_rules 人工过一遍（first-wins 下含义反转），结果记 FORK.md
