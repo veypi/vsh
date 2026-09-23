@@ -95,12 +95,12 @@
 ## M3：aic / aic-pod 接线 + 删除面（直接切换；v4.3 拆 3a/3b/3c 三个冒烟点）
 
 ### 3.1 exec 工具重写（aic）【3a】
-- [ ] 3.1.1 spec：`{1host, script, workdir?, timeout?, stdin?}`；description 含"用 `commands` 发现、`<cmd> --help` 查用法"；timeout caps 300（page 180）
-- [ ] 3.1.2 cloud 流程：analyze 预检 → Engine.Run；无 CheckLevel/WriteScope；超时转 bg
-- [ ] 3.1.3 host 转发：script 下发 pod，pod 侧引擎执行（dispatch execCmd 重写）
-- [ ] 3.1.4 page：单命令 dispatch，**分词 = shell-like 引号剥离**（单/双引号成对去引、反斜杠转义；不展开变量/glob，保证 `curl -d '{"a": "b c"}'` 类参数完整，v4.3）；组合语法明确文案"page exec 暂不支持组合语法，请拆为单命令"
-- [ ] 3.1.5 FS 写审计进 trace（随 .exec 日志 tee）
-- [ ] 3.1.6 nosandbox 保留 host-only 恒 4 级（语义不变）
+- [x] 3.1.1 spec：`{1host, script, workdir?, timeout?, stdin?, nosandbox?}`；description 含 commands 发现/`<cmd> --help`/bash x.sh 引导/规则表内不审批；timeout caps 300（page 180）
+- [x] 3.1.2 cloud 流程：analyze 预检（语法错直返/字面写目标出区可读报错引导 grant/字面 grant 恒4级）→ Engine.Run；无 CheckLevel/WriteScope；Tasks.Start+Wait 超时转 bg（不取消 ctx）；引擎 Runtime 单例跨用户 + cloudParts 路由 + QuotaFS backing + D15 初始规则表
+- [x] 3.1.3 host 转发：script 签名下发 pod，pod 侧引擎执行（engine_vsh.go + dispatch execCmd script 分支；fsauth.Snapshot 表门 + native 白名单 + SnapshotAllVbox NetClient）
+- [x] 3.1.4 page：单命令 dispatch，shell-like 引号剥离分词（不展开变量/glob）；组合语法明确文案拒绝（9 用例钉死）
+- [x] 3.1.5 FS 写审计随 .exec 日志落行（res.Writes，cloud/pod 双端）
+- [x] 3.1.6 nosandbox host-only 恒 4 级（Evaluate + Run 双检查，cloud/page 拒参）
 
 ### 3.2 fs 工具瘦身（v4.1 口径）【3b】
 - [ ] 3.2.1 保留 write/edit/read/ls/rg 五 action 三端；cp/mv/rm 下线报可读错误引导 exec
