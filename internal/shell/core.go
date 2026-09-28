@@ -1241,6 +1241,17 @@ func lookupCommandPath(ctx context.Context, exec *Execution, dir, name, source, 
 				source:  source,
 			}, true, nil
 		}
+		// 孤儿垫片（Registry 无此命令）按未找到处理：垫片只是内置名解析的
+		// 标记文件，直接执行只会空转静默成功（2026-09-28 实测：重启清授权后
+		// 残留 git 垫片把 git add/commit/log 全部吞成 rc=0 无输出）。
+		if stubName, ok, stubErr := virtualCommandStubMarker(ctx, exec, fullPath, info.Mode()); stubErr != nil {
+			return nil, false, stubErr
+		} else if ok && stubName == resolvedName {
+			if explicitPath {
+				return nil, false, classifyExplicitPathError(ctx, exec, fullPath, stdfs.ErrNotExist)
+			}
+			return nil, false, nil
+		}
 	}
 
 	resolved, ok, err := resolveCommandFile(ctx, exec, fullPath, info.Mode(), commandName)
@@ -1483,28 +1494,35 @@ func resolveVirtualCommandStub(ctx context.Context, exec *Execution, fullPath st
 }
 
 func isUnsupportedVirtualBuiltinStub(ctx context.Context, exec *Execution, fullPath string, mode stdfs.FileMode) (bool, error) {
-	if exec == nil || exec.FS == nil {
-		return false, nil
-	}
-	if !mode.IsRegular() {
-		return false, nil
-	}
 	name := path.Base(fullPath)
 	if !interp.IsBuiltin(name) || shellvariantprofile.Resolve(executionShellVariant(exec)).SupportsBuiltin(name) {
 		return false, nil
 	}
-	file, err := exec.FS.Open(ctx, fullPath)
-	if err != nil {
-		return false, nil
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-	stubName, ok, err := readVirtualCommandStub(ctx, file)
+	stubName, ok, err := virtualCommandStubMarker(ctx, exec, fullPath, mode)
 	if err != nil || !ok {
 		return false, err
 	}
 	return stubName == name, nil
+}
+
+// virtualCommandStubMarker 读出垫片标记的命令名（非垫片/读失败 → ok=false）。
+// 垫片判定集中于此：isUnsupportedVirtualBuiltinStub（不支持的虚拟内置名
+// 隐藏）与 lookupCommandPath 的孤儿垫片拦截共用。
+func virtualCommandStubMarker(ctx context.Context, exec *Execution, fullPath string, mode stdfs.FileMode) (string, bool, error) {
+	if exec == nil || exec.FS == nil {
+		return "", false, nil
+	}
+	if !mode.IsRegular() {
+		return "", false, nil
+	}
+	file, err := exec.FS.Open(ctx, fullPath)
+	if err != nil {
+		return "", false, nil
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	return readVirtualCommandStub(ctx, file)
 }
 
 func readVirtualCommandStub(ctx context.Context, r io.Reader) (string, bool, error) {

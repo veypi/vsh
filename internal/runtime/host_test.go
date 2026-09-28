@@ -470,3 +470,49 @@ func writeStubCommandFile(t testing.TB, session *Session, path, name string) {
 		t.Fatalf("Chmod(%q) error = %v", path, err)
 	}
 }
+
+// 孤儿垫片（stub 存在但 Registry 无此命令）按未找到处理：垫片只是内置名
+// 解析的标记文件，直接执行只会空转静默成功（2026-09-28 实测：重启清授权后
+// 残留 git 垫片把 git add/commit/log 吞成 rc=0 无输出）。
+func TestOrphanCommandStubIsNotExecuted(t *testing.T) {
+	t.Parallel()
+	session := newSession(t, &Config{Registry: commands.NewRegistry()})
+	writeStubCommandFile(t, session, "/bin/ghost", "ghost")
+
+	// PATH 搜索命中（/bin = 默认 BuiltinCommandDir）：127 且零输出。
+	result, err := session.Exec(context.Background(), &ExecutionRequest{Script: "ghost\n"})
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if result.ExitCode != 127 {
+		t.Fatalf("ExitCode = %d, want 127; stdout=%q stderr=%q", result.ExitCode, result.Stdout, result.Stderr)
+	}
+	if result.Stdout != "" {
+		t.Fatalf("orphan stub must not produce output: %q", result.Stdout)
+	}
+
+	// 显式路径调用：127 No such file or directory。
+	result, err = session.Exec(context.Background(), &ExecutionRequest{Script: "/bin/ghost\n"})
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if result.ExitCode != 127 {
+		t.Fatalf("explicit path ExitCode = %d, want 127; stdout=%q stderr=%q", result.ExitCode, result.Stdout, result.Stderr)
+	}
+
+	// 对照：Registry 注册后同一垫片正常派发（D14 不破坏）。
+	registry := commands.NewRegistry()
+	_ = registry.Register(commands.DefineCommand("ghost", func(ctx context.Context, inv *commands.Invocation) error {
+		_, err := io.WriteString(inv.Stdout, "real-ghost\n")
+		return err
+	}))
+	session2 := newSession(t, &Config{Registry: registry})
+	writeStubCommandFile(t, session2, "/bin/ghost", "ghost")
+	result, err = session2.Exec(context.Background(), &ExecutionRequest{Script: "ghost\n"})
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if result.Stdout != "real-ghost\n" {
+		t.Fatalf("registered dispatch stdout = %q", result.Stdout)
+	}
+}
