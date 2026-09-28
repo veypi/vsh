@@ -29,6 +29,9 @@ type Config struct {
 	Tracing          TraceConfig
 	Logger           LogCallback
 	AnalysisObserver analysis.Observer
+	// BuiltinCommandDir 重写的 shell 内置名（echo/bg/help…）解析目录
+	// （空 = /bin；host 型文件系统无内存层 /bin 时必须指向真实 stub 目录）。
+	BuiltinCommandDir string
 }
 
 type Runtime struct {

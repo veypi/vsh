@@ -162,6 +162,18 @@ func WithBaseEnv(env map[string]string) Option {
 	}
 }
 
+// WithBuiltinCommandDir sets the virtual directory used to resolve rewritten
+// shell builtin names (echo/bg/help/…) to registry commands via on-disk
+// stubs. The default "/bin" only works when the session filesystem has a
+// writable /bin (memory layer); host-style filesystems without one must
+// point this at their real stub directory (the PATH stub dir).
+func WithBuiltinCommandDir(dir string) Option {
+	return func(target *Config) error {
+		target.BuiltinCommandDir = strings.TrimSpace(dir)
+		return nil
+	}
+}
+
 // WithHost replaces the host adapter used by the runtime.
 func WithHost(adapter host.Adapter) Option {
 	return func(target *Config) error {

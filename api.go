@@ -122,6 +122,13 @@ type Config struct {
 	// interpreter. The observer is installed at runtime construction time and
 	// applies to both non-interactive and interactive shell execution.
 	AnalysisObserver analysis.Observer
+
+	// BuiltinCommandDir is the virtual directory used to resolve rewritten shell
+	// builtin names (echo/bg/help/…) to registry commands via on-disk stubs.
+	// Empty defaults to "/bin" — correct when the filesystem has a writable
+	// /bin (in-memory layer). Host-style filesystems without a memory layer
+	// must point this at their real stub directory (the PATH stub dir).
+	BuiltinCommandDir string
 }
 
 // FileSystemConfig describes how vsh provisions a session filesystem.
@@ -261,17 +268,18 @@ func (cfg *Config) runtimeConfig() *internalruntime.Config {
 		return &internalruntime.Config{}
 	}
 	return &internalruntime.Config{
-		FileSystem:       cfg.FileSystem.runtimeConfig(),
-		Registry:         cfg.Registry,
-		Policy:           cfg.Policy,
-		LimitOverrides:   cfg.LimitOverrides,
-		BaseEnv:          copyStringMap(cfg.BaseEnv),
-		Host:             cfg.Host,
-		Network:          cfg.networkConfig(),
-		NetworkClient:    cfg.NetworkClient,
-		Tracing:          cfg.Tracing,
-		Logger:           cfg.Logger,
-		AnalysisObserver: cfg.AnalysisObserver,
+		FileSystem:        cfg.FileSystem.runtimeConfig(),
+		Registry:          cfg.Registry,
+		Policy:            cfg.Policy,
+		LimitOverrides:    cfg.LimitOverrides,
+		BaseEnv:           copyStringMap(cfg.BaseEnv),
+		Host:              cfg.Host,
+		Network:           cfg.networkConfig(),
+		NetworkClient:     cfg.NetworkClient,
+		Tracing:           cfg.Tracing,
+		Logger:            cfg.Logger,
+		AnalysisObserver:  cfg.AnalysisObserver,
+		BuiltinCommandDir: cfg.BuiltinCommandDir,
 	}
 }
 
