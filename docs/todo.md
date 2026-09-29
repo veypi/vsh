@@ -61,12 +61,12 @@
 ### 2.3 fs_host.go（host）
 - [x] 2.3.1 OS backing + PinStubs 钉 `{session_root}/{sid}/bin`（幂等覆盖；非法 stub 名拒绝）
 - [x] 2.3.2 用户态执行复用同一 ufsAdapter/vbox matcher（与 OS 沙箱同源）；`>` 重定向门控用例 cloud 形态先行（同码路径），host 冒烟随 3.1.3
-- [ ] 2.3.3 Windows 虚拟根语义（1.3.1 结论：glue 呈现 unix 风格虚拟路径）——win 设备实证随 host 冒烟（无 win 设备，记录遗留）
+- [ ] 2.3.3 Windows 虚拟根语义（1.3.1 结论：glue 呈现 unix 风格虚拟路径）——未落地，win 实测被 F7 阻塞，**移交 M5-W1**
 
 ### 2.4 netclient.go
 - [x] 2.4.1 cloud：NetRuleSet default open + 动态行 + 私网阻断（RFC1918+loopback+169.254/16 含 metadata，dial 时复核防 DNS rebinding）+ 重定向逐跳复核（上限 10）/超时/响应上限 + 审计（URL/状态/大小/耗时）
 - [x] 2.4.2 **下载配额（v4.1）**：OnResponseSize 预检钩子 + 写盘路径经 FS backing QuotaFS（双闸门，curl -o 不绕过）
-- [ ] 2.4.3 host：对接 pod net 策略（NetClient 复用，Rules 源换 pod Snapshot——随 3c host grant 接线）
+- [x] 2.4.3 host：对接 pod net 策略（NetClient 复用，Rules 源换 pod Snapshot——3c 已接线：libs/netauth/snapshot_vbox.go + SnapshotVbox(sid)）
 
 ### 2.5 analyze.go
 - [x] 2.5.1 syntax AST → `{WriteTargets, UsesNetwork, SyntaxError}`；语法错直接返回
@@ -82,9 +82,9 @@
 
 ### 2.7 vbox 接口定稿 + fsauth/netauth 拆分（§11.5 阶段一）
 - [x] 2.7.1 `ivec/vbox` 接口骨架（Rule/FSRuleSet/NetRuleSet/Policy/Compile/Box + Caps + ErrOSLoweringPending）
-- [~] 2.7.2 纯 matcher 按 first-wins 重写迁入 vbox（Match/MatchNoFollow/canonical/dual-forms/ScrubEnv ✓）；状态层（cfg 耦合/Reconcile/tempTables/持久化）留 pod——挪 3c 与 grant 接线同块
-- [~] 2.7.3 **语义反转测试重写**：vbox 侧新语义测试全新写（行序回归/firmlink 防护绿）；fsauth/sandbox 旧测试随删除面处理（不另重写）——darwin seatbelt M3 行序映射随 3c
-- [ ] 2.7.4 Snapshot(sid) 纯拼接 + grant.go DenyHit 拒批删除——挪 3c
+- [x] 2.7.2 纯 matcher 按 first-wins 重写迁入 vbox（Match/MatchNoFollow/canonical/dual-forms/ScrubEnv ✓）；状态层（cfg 耦合/Reconcile/tempTables/持久化）留 pod——3c 已完成（snapshot_vbox.go 桥接）
+- [x] 2.7.3 **语义反转测试重写**：vbox 侧新语义测试全新写（行序回归/firmlink 防护绿）；fsauth/sandbox 旧测试保留——旧表面向 legacy decide 路径（sandbox profile/explain 消费），与 vbox 视图语义等价，不重写
+- [x] 2.7.4 Snapshot(sid) 纯拼接 + grant.go DenyHit 拒批删除——3c 已完成（temp 插表头压一切，TestSnapshotCfgTailAppendWins 钉死）
 
 ### 2.8 M2 出口
 - [x] 2.8.1 glue 单测全绿（30+ 用例）；UFS 适配器真实 IO 走 localFS 实测（吞吐基准非目标，功能/门控/红线用例覆盖）
@@ -160,11 +160,11 @@
 - [ ] 4.2.5 配额绕过尝试（curl -o 大文件 / tar 解包 / 重定向追加）
 
 ### 4.3 文档
-- [ ] 4.3.1 `instruction_sets_v2` §5 推倒重写（exec script 模型 + fs 五 action + grant 语义）
-- [ ] 4.3.2 exec/fs 工具描述定稿（双轨口径、env 不跨 exec 持久提示、规则表内操作不审批提示）
+- [x] 4.3.1 `instruction_sets_v2` §5 推倒重写（exec script 模型 + fs 五 action + grant 语义）——2026-09-28 已落地（现行模型摘要 + 指向 hosts-vsh-redesign）
+- [x] 4.3.2 exec/fs 工具描述定稿（双轨口径 3.2.4 已落；2026-09-29 补：env 不跨 exec 持久提示、cloud 默认 workdir=会话目录、F5 预检整单拒口径）
 - [ ] 4.3.3 skills 文档过一遍：依赖 fs rg/ls 行为的写法、exec curl/json 的写法（office_studio / req_scope / relia_scope / comply_scope 等数据面技能确认走 page exec curl 不受影响）
-- [ ] 4.3.4 permission_rules.md §3 session 硬底线条款作废重写；host_sandbox.md 同步 vbox 语义
-- [ ] 4.3.5 aic/docs/CHANGELOG.md 记录切换
+- [x] 4.3.4 permission_rules.md 重写；host_sandbox.md 同步 vbox 语义——2026-09-29 已落地（permission_rules 按 vbox first-wins 全量重写；host_sandbox 2026-09-28 已同步）
+- [x] 4.3.5 aic/docs/CHANGELOG.md 记录切换——2026-09-29 补 v0.16.0 条目（redesign 切换 / 模型层发布 / 文档整理 / F 清单复核批）
 
 ### 4.4 vbox 阶段二（M4 后，可排期）
 - [ ] 4.4.1 sandbox_*.go 物理迁入 vbox，exec_procs 删除收尾，pod 改 import
@@ -191,12 +191,32 @@
 | # | 级别 | 问题 | 状态 |
 |---|---|---|---|
 | F7 | 阻塞 | win exec 建会话即 `write /C: path denied`：Windows 虚拟根语义（2.3.3）未落地，win 端完全不可用 | [ ] 待修 |
-| F4 | 正确性 | cloud 内存层 symlink 不跟随 UFS backing：经链接写返回 0 落影子子树、经链接读真实目标失败；无逃逸（fail-closed）但静默误导 | [ ] 待修 |
-| F1 | UX | analyze 预检整单拦字面 /tmp 写，运行期内存层本允许（动态路径可写），预检与运行期语义不一致 | [ ] 待修 |
-| F2 | UX | cloud 默认 workdir=/u/admin（ro 用户根），相对路径写全被拒（host 默认 rw workspace）；建议默认会话目录 | [ ] 待定 |
-| F3 | 误报 | 预检把 `ln -s <target> <link>` 的 target（读操作）当写目标拦单 | [ ] 待修 |
-| F5 | 一致性 | 出区写：cloud 预检整单拒 vs host 运行期逐命令拒，两端预检覆盖不一致 | [ ] 待确认是否 by design |
-| F6 | 平台 | 多 page 客户端连接时 page exec 路由卡在无 OPFS 的客户端（820eea86），原客户端不再被选中 | [ ] 待查（属 aic 路由非 vsh） |
-| F8 | 偏差 | host stub 目录实为 sessions/.vsh-host/bin（共享），非 2.3.1 的 {session_root}/{sid}/bin；疑 Runtime 单例有意调整 | [ ] 待确认 |
+| F4 | 正确性 | cloud 内存层 symlink 不跟随 UFS backing：经链接写返回 0 落影子子树、经链接读真实目标失败；无逃逸（fail-closed）但静默误导 | [x] 已修（2026-09-24 follow 后路由 + TestCloudFSSymlinkEscapeFollowsToBacking 回归，2026-09-29 复核绿；保留创建能力，方案 A 禁创建经用户拍板不执行） |
+| F1 | UX | analyze 预检整单拦字面 /tmp 写，运行期内存层本允许（动态路径可写），预检与运行期语义不一致 | [x] 已修（2026-09-24：cloudDeniedWrites 用同源 vbox 快照 + UnderMemPrefix 跳过，2026-09-29 复核） |
+| F2 | UX | cloud 默认 workdir=/u/admin（ro 用户根），相对路径写全被拒（host 默认 rw workspace）；建议默认会话目录 | [x] 已修（2026-09-29：默认 workdir = 会话目录，工具描述同步） |
+| F3 | 误报 | 预检把 `ln -s <target> <link>` 的 target（读操作）当写目标拦单 | [x] 已修（2026-09-24：literalArgsEach 逐词独立 + lastPositional 仅取字面末位，2026-09-29 复核） |
+| F5 | 一致性 | 出区写：cloud 预检整单拒 vs host 运行期逐命令拒，两端预检覆盖不一致 | [x] by design（2026-09-29 拍板：维持预检整单拒 fail-fast，口径已写 exec 工具描述） |
+| F6 | 平台 | 多 page 客户端连接时 page exec 路由卡在无 OPFS 的客户端（820eea86），原客户端不再被选中 | [x] 已修（2026-09-29：page.js 能力门——无 OPFS 的 tab 不加入 queue 组 + 运行期 OPFS 错误自愈退订；page.test.js 门用例绿） |
+| F8 | 偏差 | host stub 目录实为 sessions/.vsh-host/bin（共享），非 2.3.1 的 {session_root}/{sid}/bin | [x] by design（engine_vsh.go 文件头偏差 1 已记录：NewSession 无 sid 上下文 + registry 优先安全性等价；2026-09-29 复核，死代码 StubDirFor/PinStubs 已删） |
 | F9 | 审批 | 三次 grant（cloud fs / host fs / host cmd）均触发 4 级审批弹窗，用户手动批准——审批链正常 | [x] 已确认正常 |
-| F10 | 体验 | 前台 exec 自身注册进 bg 任务表占 bg-N id，`bg kill <自己>` 自杀（exit=130），id 语义易混 | [ ] 待定 |
+| F10 | 体验 | 前台 exec 自身注册进 bg 任务表占 bg-N id，`bg kill <自己>` 自杀（exit=130），id 语义易混 | [x] 已修（execwait 重构后前台不注册任务表，仅等待到期 Adopt——与 2026-09-29 拍板方案一致） |
+
+---
+
+## M5：三平台拉齐 + 执行链正确性（2026-09-29 规划，用户拍板）
+
+拍板：F4 走方案 A（cloud 禁 symlink）；F5 维持预检整单拒（口径写工具描述）；F10 前台不注册任务表。顺序：C 系列（正确性）→ W 系列（平台）。
+
+### C 系列：执行链正确性
+- [x] C0 todo 状态 sweep（2.4.3/2.7.2/2.7.3/2.7.4/4.3.1/4.3.4 勾选，F 清单对齐）
+- [x] C1 F4：复核发现 2026-09-24 已修（follow 后路由 + 回归测试绿）；用户拍板关闭，不执行禁创建
+- [x] C2 F3+F1：复核发现均已于 2026-09-24 修复（F3 写参表逐词独立、F1 预检同源 + 内存层跳过）；F5 拍板 by design，口径已写 exec 工具描述
+- [x] C3 F2：cloud 默认 workdir 改会话目录（cloud.go + 工具描述，2026-09-29）
+- [x] C4 F6：page.js OPFS 能力门（静态探测不订阅 + 运行期错误自愈退订）+ 门用例（2026-09-29）
+- [x] C5 F8+F10：均复核关闭——F8 = engine_vsh 文件头偏差 1 记录在案（死代码 StubDirFor/PinStubs 已删）；F10 = execwait 已前台不注册（仅超时 Adopt）
+
+### W 系列：三平台可用性
+- [ ] W1 Windows 虚拟根（F7）：定位 /C 泄漏点；OSVFS view 层 /c/ ↔ C:\ 双向映射；native 边界回译；win 冒烟（3.7.3 win 部分 + 3.6.1/3.6.2 win config 核对）
+- [ ] W2 vbox 阶段二（4.4.1）：sandbox_*.go 迁入 vbox；darwin seatbelt 改逆序输出（first-wins 等价映射 + 行序回归）；exec_procs 删除
+- [ ] W3 linux/windows 内核行序映射（permission_rules §5）：bwrap 回补 / 受限令牌 ACE；Caps.OrderedFSRules 按平台回报
+- [ ] W4 验收收口：aic-pod todo 剩项（取消终止/沙箱不可用/跨会话隔离，linux 原生）；风险看板 Windows 行关闭；host_sandbox/permission_rules 状态行同步
