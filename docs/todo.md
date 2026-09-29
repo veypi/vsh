@@ -218,5 +218,5 @@
 ### W 系列：三平台可用性
 - [x] W1 Windows 虚拟根（F7）：复核发现 /c/ 规范形已全链路落地（vbox canonical + hostCanonical）；2026-09-29 win 实测矩阵全通，F7 关闭；3.6.1/3.6.2 win config 核对无需改动
 - [x] W2 vbox 阶段二（4.4.1 完成）：sandbox_*.go + 进程托管（Manager/RunProcess/Spawn）迁入 vbox，exec_procs 物理删除；darwin 沙箱输入切换 fsauth.Snapshot（vbox first-wins）——SBPL 逆序输出 + 行序回归测试（sandbox_policy_darwin_test 重写）；DeniedError 归 vbox（proto 别名）；pod 可写根经 vbox hooks 注入
-- [ ] W3 linux/windows 内核行序映射（permission_rules §5）：bwrap 回补 / 受限令牌 ACE；Caps.OrderedFSRules 按平台回报
+- [x] W3 linux/windows 内核行序映射（permission_rules §5）：evaluateDenyTargets first-wins 求值——linux bwrap 终局 ro/rw 按序回补（含嵌套洞字面前缀）；windows 终局 rw 跳过 ACE（ro/deny 仍落，嵌套洞仅工具层）；Caps.OrderedFSRules linux 翻 true（linux 原生实测随 W4——主机暂离线）
 - [ ] W4 验收收口：aic-pod todo 剩项（取消终止/沙箱不可用/跨会话隔离，linux 原生）；风险看板 Windows 行关闭；host_sandbox/permission_rules 状态行同步
