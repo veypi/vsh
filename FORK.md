@@ -15,7 +15,7 @@ flake.nix、flake.lock、go.work、go.work.sum、pnpm-*、package.json、.npmrc�
 .autoenv*、.agents/、.github/、Makefile、CLAUDE.md、CONTRIBUTING.md。
 
 contrib/ 全量保留（jq 挂入需要）；examples/ 保留；上游文档（SPEC.md / THREAT_MODEL.md /
-SECURITY.md / AGENTS.md / docs/AST_ROADMAP.md）保留作参考。
+SECURITY.md / AGENTS.md）保留作参考。
 
 ## 改名（scripts/rename.sh，可重跑、幂等）
 
@@ -26,7 +26,7 @@ SECURITY.md / AGENTS.md / docs/AST_ROADMAP.md）保留作参考。
 动作：① `github.com/ewhauser/gbash` → `github.com/veypi/vsh`（全部 go.mod / .go / md）；
 ② 裸标识符 `gbash`→`vsh`、`GBASH`→`VSH`、`Gbash`→`Vsh`；
 ③ 文件名/目录名含 `gbash` 的同步改名（`cmd/gbash` → `cmd/vsh` 等）。
-`./docs` 目录豁免（design.md / todo.md 是平台自有文档），仅上游 `docs/AST_ROADMAP.md` 参与改名。
+`./docs` 目录豁免（todo.md 是平台自有文档）。
 注意：第三方依赖 `github.com/ewhauser/gomonty`（contrib/python 等使用）**不是**改名对象，保留原样。
 
 ## 上游同步策略
@@ -67,8 +67,7 @@ win 侧 pending（机器不在线）。
 旧「先宽行后窄行覆盖」写法在新语义下反转，需把窄行挪前；文件尾 permanent grant 追加的
 `rw:` 行现在最先生效，注意是否意外压过前面的 `deny:` 行。
 
-pod 侧 fsauth/netauth 从「后命中者胜（last-wins）」反转为「首命中生效（first-wins）」
-（见 design.md §11.5）。**开发者机器（mbp / win）上的存量 config.yaml `fs_rules`
+pod 侧 fsauth/netauth 从「后命中者胜（last-wins）」反转为「首命中生效（first-wins）」。**开发者机器（mbp / win）上的存量 config.yaml `fs_rules`
 行序在两种语义下含义相反**——切换 vbox 前必须人工过一遍（todo M3.6.1）。
 
 ## Windows PATH 分隔符（M1.3.1 核实结论）

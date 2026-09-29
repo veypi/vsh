@@ -37,7 +37,7 @@ res, _ := sess.Exec(ctx, &vsh.ExecutionRequest{Script: s, WorkDir: wd, Env: env}
 - 根 module `github.com/veypi/vsh`：引擎本体（`internal/` 不对外）；
 - `contrib/*`：可选命令模块（jq/yq/awk 等，按需挂入 Registry）；
 - `examples/`：用法示例；
-- `docs/`：设计文档（design.md = vsh 引擎化契约源，todo.md = 实施跟踪）；
+- `docs/`：实施跟踪（todo.md）；fork 差异与行为定案见 FORK.md；
 - `scripts/rename.sh`：fork 改名脚本（可重跑，见 FORK.md）。
 
 上游完整文档（SPEC.md / THREAT_MODEL.md / AGENTS.md）保留作参考，其中

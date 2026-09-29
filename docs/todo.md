@@ -1,7 +1,7 @@
-# vsh 引擎化实施 todo（依据 design.md v4.3）
+# vsh 引擎化实施 todo
 
 - 创建：2026-09-23（会话 b60a961e）
-- 契约源：`vsh/docs/design.md` v4.3——条款冲突以设计文档为准，本文件只做任务分解与进度跟踪
+- 契约源：fork 行为定案见 `FORK.md`；平台集成契约见 aic-pod `docs/hosts-vsh-redesign.md` / `docs/hosts-tools.md`；规则表语义见 aic `docs/permission_rules.md`。原 v4.3 设计稿已随实施完成删除（历史见 git），本文件只做任务分解与进度跟踪
 - 基线：gbash @ `88728c5a0618cf8d8278a6602ae9e1cf05a2159d`（/Users/veypi/test/gbash，工作区干净）
 - 工作区：go.work 加 `./vsh`、`./vbox`（M1）；vsh/vbox 仓已空建（仅 LICENSE/README）
 - 纪律：直接切换无灰度（D10）；不自己重启后端（用户操作）；提交只 add 自己改的文件
@@ -41,7 +41,7 @@
 
 ## M2：libs/vsh glue 七文件 + vbox 接口定稿
 
-目标：`aic-pod/libs/vsh`（cloud/host 共用 glue）全部落地 + 单测；vbox 接口（design §11.3）定稿，实现暂留 pod。
+目标：`aic-pod/libs/vsh`（cloud/host 共用 glue）全部落地 + 单测；vbox 接口定稿，实现暂留 pod。
 
 ### 2.1 engine.go
 - [x] 2.1.1 Runtime 单例 + NewSession per exec + limits（§6 全项落 engineLimits；Runtime 级 HOME 钉内存层 /tmp/.vsh-layout-home 供布局初始化，真实 HOME 每 exec 注入）
@@ -130,33 +130,33 @@
 - [x] 3.6.2 caps/exec_allow 种子白名单核对（mbp exec_allow 空——无 shell/解释器，通过；win pending）
 
 ### 3.7 M3 出口（v4.3：三个提交点各自冒烟）
-- [ ] 3.7.1 3a 冒烟（3.1 后，用户重启后端）：exec script 三端（cloud/host/page）
-- [ ] 3.7.2 3b 冒烟（3.2+3.3+3.5 后）：fs 五 action 三端 / page 命令 / vcore 无残留
-- [ ] 3.7.3 3c 冒烟（3.4+3.6 后）：grant 闭环 / 规则表行序回归；host（mbp）+ win 设备冒烟
+- [x] 3.7.1 3a 冒烟（3.1 后，用户重启后端）：exec script 三端（cloud/host/page）——2026-09-24 实测全过（报告：会话 f4aea329 vsh_smoke_report.md）
+- [x] 3.7.2 3b 冒烟（3.2+3.3+3.5 后）：fs 五 action 三端 / page 命令 / vcore 无残留——2026-09-24 实测全过（vcore 目录已删、代码无引用，仅 docs/注释历史记录）
+- [~] 3.7.3 3c 冒烟（3.4+3.6 后）：grant 闭环 / 规则表行序回归；host（mbp）+ win 设备冒烟——2026-09-24 cloud+mbp 全过（grant 双工具同表、行序回归、4 级审批链用户确认）；win 被 F7 阻塞
 
 ---
 
 ## M4：验收 + 红队 + 文档
 
-### 4.1 验收 12 条（design §7 逐条打勾）
-- [ ] 4.1.1 脚本语义冒烟：管道/重定向/heredoc/变量/嵌套 bash/退出码 126·127·130·124
-- [ ] 4.1.2 红线：UFS 无 stub 污染；host stub 只落会话 bin；registry 优先双端用例
-- [ ] 4.1.3 权限三段：便利根自由 / grant temp 通行 / 越界硬拒绝引导 grant；行序回归（ro 行存在时会话目录可写）；symlink 红队；Match/MatchNoFollow 双端同 matcher 单测
-- [ ] 4.1.4 动态逃逸 `rm $X` 拒绝且报错可读
-- [ ] 4.1.5 网络：default open / 私网阻断（含 169.254.169.254）/ 审计字段齐全 / 不触发审批
-- [ ] 4.1.6 bg list/wait/kill 闭环 + 到期 124
-- [ ] 4.1.7 panic 隔离；并发会话隔离
+### 4.1 验收 12 条（逐条打勾）
+- [x] 4.1.1 脚本语义冒烟：管道/重定向/heredoc/变量/嵌套 bash/退出码 126·127·130·124——2026-09-24 实测（124 由 timeout 内建、130 由 bg kill 旁证）
+- [x] 4.1.2 红线：UFS 无 stub 污染；host stub 只落会话 bin；registry 优先双端用例——2026-09-24 实测（host stub 在 sessions/.vsh-host/bin 共 137 个，见 F8；伪造 jq shadow 不生效）
+- [x] 4.1.3 权限三段：便利根自由 / grant temp 通行 / 越界硬拒绝引导 grant；行序回归（ro 行存在时会话目录可写）；symlink 红队；Match/MatchNoFollow 双端同 matcher 单测——2026-09-24 实测（symlink 见 F4）
+- [x] 4.1.4 动态逃逸 `rm $X` 拒绝且报错可读——2026-09-24 实测（ro 区逐文件拒绝，目录完好）
+- [x] 4.1.5 网络：default open / 私网阻断（含 169.254.169.254）/ 审计字段齐全 / 不触发审批——2026-09-24 实测（200 + 三例私网 code=7；审计字段在 .exec 日志未逐一核）
+- [~] 4.1.6 bg list/wait/kill 闭环 + 到期 124——2026-09-24 run/list/output/kill/wait 实测全通；到期 124 未实测（需 30min 墙钟）
+- [~] 4.1.7 panic 隔离；并发会话隔离——单测覆盖（2.1.4），未实地构造
 - [ ] 4.1.8 稳定性：连续 500 次 exec 无泄漏；Session P95 记录数值（对照 §10.0 基线）；可执行位结论
-- [ ] 4.1.9 page 受限语法文案 + help 原生自答
-- [ ] 4.1.10 host：白名单外 127；grant cmd 审批后可用且与内建管道组合；OS 沙箱收容；`>` 重定向门控
-- [ ] 4.1.11 fs 五 action 三端回归；cp/mv/rm 下线报错；vcore 无残留；**配额闭环**（引擎内建写超限报错、fs 预检、rm 不拦）
-- [ ] 4.1.12 page ls/rg 单实现双通道一致；cp/mv/rm exec 命令正确；fs write/edit/read 回归
+- [x] 4.1.9 page 受限语法文案 + help 原生自答——2026-09-24 实测（组合语法拒绝文案 ✓；`<cmd> --help` 覆盖 ✓；裸 help 为 bash 原生自答）
+- [x] 4.1.10 host：白名单外 127；grant cmd 审批后可用且与内建管道组合；OS 沙箱收容；`>` 重定向门控——2026-09-24 实测（python3 127 ✓、grant cmd + 管道 ✓、重定向门控 ✓；OS 沙箱收容未外部验证）
+- [~] 4.1.11 fs 五 action 三端回归；cp/mv/rm 下线报错；vcore 无残留；**配额闭环**（引擎内建写超限报错、fs 预检、rm 不拦）——2026-09-24 前三项实测过；配额机制就位（QuotaFS check）但实满测试未做
+- [x] 4.1.12 page ls/rg 单实现双通道一致；cp/mv/rm exec 命令正确；fs write/edit/read 回归——2026-09-24 实测（五 action + exec cp/rg；遇一次 page 路由问题记 F6）
 
 ### 4.2 红队
-- [ ] 4.2.1 symlink 逃逸用例集（双端）
-- [ ] 4.2.2 stub shadow 尝试（写同名真实文件，双端）
-- [ ] 4.2.3 脚本文件嵌套绕过（bash x.sh 内调未授权原生命令）
-- [ ] 4.2.4 分析→执行 TOCTOU 窗口利用尝试（确认仅影响报错文案）
+- [x] 4.2.1 symlink 逃逸用例集（双端）——2026-09-24 实测双端无逃逸（cloud symlink 语义异常记 F4；host ln 不支持）
+- [x] 4.2.2 stub shadow 尝试（写同名真实文件，双端）——2026-09-24 实测 registry 优先不可劫持
+- [x] 4.2.3 脚本文件嵌套绕过（bash x.sh 内调未授权原生命令）——2026-09-24 实测 bash x.sh 内 python3 仍 127
+- [x] 4.2.4 分析→执行 TOCTOU 窗口利用尝试（确认仅影响报错文案）——文档化 by design
 - [ ] 4.2.5 配额绕过尝试（curl -o 大文件 / tar 解包 / 重定向追加）
 
 ### 4.3 文档
@@ -175,11 +175,28 @@
 
 | 风险 | 缓解 | 状态 |
 |---|---|---|
-| Windows PATH `:` 切分切碎盘符 | M1.3.1 强制实证，必要则 fork 改切分 | [x] 代码级结论：fork 不改，约束落 glue（FORK.md）；设备实证随 M2.3.3 |
-| SymlinkDeny 抢先于 FS 适配器 | M2.1.2 显式覆盖 + 用例 | [ ] |
+| Windows PATH `:` 切分切碎盘符 | M1.3.1 强制实证，必要则 fork 改切分 | [!] win 实证失败（2026-09-24）：exec 建会话即 write /C 被拒（F7），虚拟根语义待落地 |
+| SymlinkDeny 抢先于 FS 适配器 | M2.1.2 显式覆盖 + 用例 | [x] 已落地；2026-09-24 实测双端无逃逸（cloud symlink 语义异常记 F4） |
 | 内建 --help 覆盖不全 | M1.3.2 清点补齐 | [x] 20 缺口已补齐，coverage 测试常驻 |
-| UFS 无可执行位持久化 | M2.2.5 核实，工具描述引导 bash x.sh | [ ] |
-| 存量 config 行序反转灵异 | M3.6.1 人工迁移 + FORK.md | [ ] |
-| analyze 写参表 90 内建工作量 | M2.5.2 估足，雏形演化自 fsRequirement | [ ] |
-| fsauth/sandbox 测试重写量（2500+ 行） | M2.7.3 独立任务块，不与其他并行 | [ ] |
-| 配额随 vcore 删除丢失 | M3.5.1 先迁移后删除，验收 4.1.11 闭环 | [ ] |
+| UFS 无可执行位持久化 | M2.2.5 核实，工具描述引导 bash x.sh | [x] 已核实（chmod ErrUnsupportedOp + bash x.sh 引导）；126 退出码 2026-09-24 实测 |
+| 存量 config 行序反转灵异 | M3.6.1 人工迁移 + FORK.md | [x] mbp 已确认无需改动（win pending 随 F7） |
+| analyze 写参表 90 内建工作量 | M2.5.2 估足，雏形演化自 fsRequirement | [x] 已落地；实测发现预检过严/误报记 F1/F3 |
+| fsauth/sandbox 测试重写量（2500+ 行） | M2.7.3 独立任务块，不与其他并行 | [x] vbox 侧新语义测试绿；3c 冒烟过（win 残项随 F7） |
+| 配额随 vcore 删除丢失 | M3.5.1 先迁移后删除，验收 4.1.11 闭环 | [~] QuotaFS 机制就位（check 闸门）；实满与绕过测试未做 |
+
+---
+
+## 实测发现清单（2026-09-24，会话 f4aea329；详报 vsh_smoke_report.md）
+
+| # | 级别 | 问题 | 状态 |
+|---|---|---|---|
+| F7 | 阻塞 | win exec 建会话即 `write /C: path denied`：Windows 虚拟根语义（2.3.3）未落地，win 端完全不可用 | [ ] 待修 |
+| F4 | 正确性 | cloud 内存层 symlink 不跟随 UFS backing：经链接写返回 0 落影子子树、经链接读真实目标失败；无逃逸（fail-closed）但静默误导 | [ ] 待修 |
+| F1 | UX | analyze 预检整单拦字面 /tmp 写，运行期内存层本允许（动态路径可写），预检与运行期语义不一致 | [ ] 待修 |
+| F2 | UX | cloud 默认 workdir=/u/admin（ro 用户根），相对路径写全被拒（host 默认 rw workspace）；建议默认会话目录 | [ ] 待定 |
+| F3 | 误报 | 预检把 `ln -s <target> <link>` 的 target（读操作）当写目标拦单 | [ ] 待修 |
+| F5 | 一致性 | 出区写：cloud 预检整单拒 vs host 运行期逐命令拒，两端预检覆盖不一致 | [ ] 待确认是否 by design |
+| F6 | 平台 | 多 page 客户端连接时 page exec 路由卡在无 OPFS 的客户端（820eea86），原客户端不再被选中 | [ ] 待查（属 aic 路由非 vsh） |
+| F8 | 偏差 | host stub 目录实为 sessions/.vsh-host/bin（共享），非 2.3.1 的 {session_root}/{sid}/bin；疑 Runtime 单例有意调整 | [ ] 待确认 |
+| F9 | 审批 | 三次 grant（cloud fs / host fs / host cmd）均触发 4 级审批弹窗，用户手动批准——审批链正常 | [x] 已确认正常 |
+| F10 | 体验 | 前台 exec 自身注册进 bg 任务表占 bg-N id，`bg kill <自己>` 自杀（exit=130），id 语义易混 | [ ] 待定 |

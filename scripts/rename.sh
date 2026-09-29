@@ -4,15 +4,12 @@
 # Renames: module path -> github.com/veypi/vsh, identifiers vsh->vsh / VSH->VSH / Vsh->Vsh,
 # and files/dirs with 'vsh' in their name.
 # Usage: scripts/rename.sh [repo_root]   (default: parent of this script)
-# Note: ./docs is excluded except upstream docs/AST_ROADMAP.md (design/todo are ours).
+# Note: ./docs is excluded (todo is ours; the old design/AST_ROADMAP files were removed).
 set -euo pipefail
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$ROOT"
 
 files=$(grep -rlI -e 'vsh' -e 'VSH' -e 'Vsh' . --exclude-dir=.git --exclude-dir=docs || true)
-if [ -f docs/AST_ROADMAP.md ]; then
-  files="$files docs/AST_ROADMAP.md"
-fi
 
 if [ -n "${files// /}" ]; then
   # 1) full module path first (order matters), 2) bare identifiers

@@ -1,7 +1,11 @@
 # vsh
 
-Status: Draft v0.1
-Last updated: 2026-04-04
+Status: 上游基线产品说明（gbash 时代草稿，2026-04-04，保留作定位参考）
+
+> fork 后的行为差异与定案以 [FORK.md](FORK.md) 为准；平台集成契约见 aic-pod
+> `docs/hosts-vsh-redesign.md` 与 `docs/hosts-tools.md`。注意：fork 已支持 host
+> 型执行（显式程序路径与原生二进制由集成层经规则表装配），文中 “unknown
+> commands never fall through to the host OS” 等表述仅描述上游基线的默认形态。
 
 ## 1. Purpose
 
