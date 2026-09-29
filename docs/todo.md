@@ -61,7 +61,7 @@
 ### 2.3 fs_host.go（host）
 - [x] 2.3.1 OS backing + PinStubs 钉 `{session_root}/{sid}/bin`（幂等覆盖；非法 stub 名拒绝）
 - [x] 2.3.2 用户态执行复用同一 ufsAdapter/vbox matcher（与 OS 沙箱同源）；`>` 重定向门控用例 cloud 形态先行（同码路径），host 冒烟随 3.1.3
-- [ ] 2.3.3 Windows 虚拟根语义（1.3.1 结论：glue 呈现 unix 风格虚拟路径）——未落地，win 实测被 F7 阻塞，**移交 M5-W1**
+- [x] 2.3.3 Windows 虚拟根语义（1.3.1 结论：glue 呈现 unix 风格虚拟路径）——vbox canonical /c/ 规范形 + hostCanonical 全链路已落地（d64870b 起）；2026-09-29 win 实测全通（F7 解除，矩阵见 F7 行）
 
 ### 2.4 netclient.go
 - [x] 2.4.1 cloud：NetRuleSet default open + 动态行 + 私网阻断（RFC1918+loopback+169.254/16 含 metadata，dial 时复核防 DNS rebinding）+ 重定向逐跳复核（上限 10）/超时/响应上限 + 审计（URL/状态/大小/耗时）
@@ -126,13 +126,13 @@
 - [x] 3.5.6 `grep -r aic-pod/libs/vcore` 为空（验收 11；vcore 目录物理删除）
 
 ### 3.6 存量配置迁移【3c】
-- [x] 3.6.1 mbp config.yaml 人工核对（2026-09-24 用户确认无需改动；单行 rw:/var/run/docker.sock 无次序问题，net/ssh 空）——结果记 FORK.md；win pending（机器不在线）
-- [x] 3.6.2 caps/exec_allow 种子白名单核对（mbp exec_allow 空——无 shell/解释器，通过；win pending）
+- [x] 3.6.1 mbp config.yaml 人工核对（2026-09-24 用户确认无需改动）；win 2026-09-29 核对：39 行 fs_rules 无需改动——cfg 组内反转保持「文件后写优先」书写语义，旧表含义不变（实测 .ssh builtin deny、越界拒、workspace rw 全对）
+- [x] 3.6.2 caps/exec_allow 种子白名单核对（mbp exec_allow 空——无 shell/解释器，通过；win 2026-09-29：exec_policy open、exec_allow/deny 空、session grants 空——通过）
 
 ### 3.7 M3 出口（v4.3：三个提交点各自冒烟）
 - [x] 3.7.1 3a 冒烟（3.1 后，用户重启后端）：exec script 三端（cloud/host/page）——2026-09-24 实测全过（报告：会话 f4aea329 vsh_smoke_report.md）
 - [x] 3.7.2 3b 冒烟（3.2+3.3+3.5 后）：fs 五 action 三端 / page 命令 / vcore 无残留——2026-09-24 实测全过（vcore 目录已删、代码无引用，仅 docs/注释历史记录）
-- [~] 3.7.3 3c 冒烟（3.4+3.6 后）：grant 闭环 / 规则表行序回归；host（mbp）+ win 设备冒烟——2026-09-24 cloud+mbp 全过（grant 双工具同表、行序回归、4 级审批链用户确认）；win 被 F7 阻塞
+- [x] 3.7.3 3c 冒烟（3.4+3.6 后）：grant 闭环 / 规则表行序回归；host（mbp）+ win 设备冒烟——2026-09-24 cloud+mbp 全过；2026-09-29 win 全过（F7 解除：建会话/写工作区/管道/jq/变量/127/规则门/builtin deny/native curl/bg/grant status）
 
 ---
 
@@ -167,7 +167,7 @@
 - [x] 4.3.5 aic/docs/CHANGELOG.md 记录切换——2026-09-29 补 v0.16.0 条目（redesign 切换 / 模型层发布 / 文档整理 / F 清单复核批）
 
 ### 4.4 vbox 阶段二（M4 后，可排期）
-- [ ] 4.4.1 sandbox_*.go 物理迁入 vbox，exec_procs 删除收尾，pod 改 import
+- [x] 4.4.1 sandbox_*.go 物理迁入 vbox，exec_procs 删除收尾，pod 改 import——2026-09-29 W2 完成（darwin 输入同步切换 vbox 快照 + 逆序输出）
 
 ---
 
@@ -175,7 +175,7 @@
 
 | 风险 | 缓解 | 状态 |
 |---|---|---|
-| Windows PATH `:` 切分切碎盘符 | M1.3.1 强制实证，必要则 fork 改切分 | [!] win 实证失败（2026-09-24）：exec 建会话即 write /C 被拒（F7），虚拟根语义待落地 |
+| Windows PATH `:` 切分切碎盘符 | M1.3.1 强制实证，必要则 fork 改切分 | [x] 已关闭（2026-09-29 win 实测：/c/ 规范形全链路生效，F7 解除——约束落 glue 的 1.3.1 结论成立，fork 未改切分） |
 | SymlinkDeny 抢先于 FS 适配器 | M2.1.2 显式覆盖 + 用例 | [x] 已落地；2026-09-24 实测双端无逃逸（cloud symlink 语义异常记 F4） |
 | 内建 --help 覆盖不全 | M1.3.2 清点补齐 | [x] 20 缺口已补齐，coverage 测试常驻 |
 | UFS 无可执行位持久化 | M2.2.5 核实，工具描述引导 bash x.sh | [x] 已核实（chmod ErrUnsupportedOp + bash x.sh 引导）；126 退出码 2026-09-24 实测 |
@@ -190,7 +190,7 @@
 
 | # | 级别 | 问题 | 状态 |
 |---|---|---|---|
-| F7 | 阻塞 | win exec 建会话即 `write /C: path denied`：Windows 虚拟根语义（2.3.3）未落地，win 端完全不可用 | [ ] 待修 |
+| F7 | 阻塞 | win exec 建会话即 `write /C: path denied`：Windows 虚拟根语义（2.3.3）未落地，win 端完全不可用 | [x] 已修（vbox canonical /c/ 规范形 + hostCanonical，d64870b 起；2026-09-29 win 实测：pwd=/c/Users/v/aic、/tmp 别名、相对写、jq/tr/wc 管道、变量、127、越界拒 /c/ 形报错+grant 引导、.ssh builtin deny、native curl.exe、bg、grant status 全通） |
 | F4 | 正确性 | cloud 内存层 symlink 不跟随 UFS backing：经链接写返回 0 落影子子树、经链接读真实目标失败；无逃逸（fail-closed）但静默误导 | [x] 已修（2026-09-24 follow 后路由 + TestCloudFSSymlinkEscapeFollowsToBacking 回归，2026-09-29 复核绿；保留创建能力，方案 A 禁创建经用户拍板不执行） |
 | F1 | UX | analyze 预检整单拦字面 /tmp 写，运行期内存层本允许（动态路径可写），预检与运行期语义不一致 | [x] 已修（2026-09-24：cloudDeniedWrites 用同源 vbox 快照 + UnderMemPrefix 跳过，2026-09-29 复核） |
 | F2 | UX | cloud 默认 workdir=/u/admin（ro 用户根），相对路径写全被拒（host 默认 rw workspace）；建议默认会话目录 | [x] 已修（2026-09-29：默认 workdir = 会话目录，工具描述同步） |
@@ -216,7 +216,7 @@
 - [x] C5 F8+F10：均复核关闭——F8 = engine_vsh 文件头偏差 1 记录在案（死代码 StubDirFor/PinStubs 已删）；F10 = execwait 已前台不注册（仅超时 Adopt）
 
 ### W 系列：三平台可用性
-- [ ] W1 Windows 虚拟根（F7）：定位 /C 泄漏点；OSVFS view 层 /c/ ↔ C:\ 双向映射；native 边界回译；win 冒烟（3.7.3 win 部分 + 3.6.1/3.6.2 win config 核对）
-- [ ] W2 vbox 阶段二（4.4.1）：sandbox_*.go 迁入 vbox；darwin seatbelt 改逆序输出（first-wins 等价映射 + 行序回归）；exec_procs 删除
+- [x] W1 Windows 虚拟根（F7）：复核发现 /c/ 规范形已全链路落地（vbox canonical + hostCanonical）；2026-09-29 win 实测矩阵全通，F7 关闭；3.6.1/3.6.2 win config 核对无需改动
+- [x] W2 vbox 阶段二（4.4.1 完成）：sandbox_*.go + 进程托管（Manager/RunProcess/Spawn）迁入 vbox，exec_procs 物理删除；darwin 沙箱输入切换 fsauth.Snapshot（vbox first-wins）——SBPL 逆序输出 + 行序回归测试（sandbox_policy_darwin_test 重写）；DeniedError 归 vbox（proto 别名）；pod 可写根经 vbox hooks 注入
 - [ ] W3 linux/windows 内核行序映射（permission_rules §5）：bwrap 回补 / 受限令牌 ACE；Caps.OrderedFSRules 按平台回报
 - [ ] W4 验收收口：aic-pod todo 剩项（取消终止/沙箱不可用/跨会话隔离，linux 原生）；风险看板 Windows 行关闭；host_sandbox/permission_rules 状态行同步
