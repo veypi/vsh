@@ -647,7 +647,7 @@ func (m *core) callHandler(exec *Execution, budget *executionBudget) interp.Call
 		}
 
 		if hc.IsBuiltin(args[0]) && shouldRewriteBuiltin(args[0]) {
-			if _, ok := lookupRegistryCommand(exec, args[0]); ok {
+			if _, ok := lookupRegistryCommand(exec, args[0]); ok && builtinCommandStubExists(ctx, exec, args[0]) {
 				rewritten := make([]string, len(args))
 				copy(rewritten[1:], args[1:])
 				rewritten[0] = path.Join(builtinCommandDir(exec), args[0])
@@ -680,6 +680,23 @@ func shouldRewriteBuiltin(name string) bool {
 	default:
 		return true
 	}
+}
+
+// builtinCommandStubExists 报告内置名重写目标 $BuiltinCommandDir/<name> 的 stub
+// 标记文件是否存在。stub 是「该内置名由引擎注册命令提供」的标记（布局初始化
+// 写入）；没有 stub 的内置名（exit/eval/set 等）不重写为路径，留给解释器正常
+// 派发——否则会经由 Registry 的兜底查找被合成成外部程序（host 上表现为
+// "<stubDir>/<名>: No such file or directory"、退出码 127）。
+func builtinCommandStubExists(ctx context.Context, exec *Execution, name string) bool {
+	if exec == nil || exec.FS == nil {
+		return false
+	}
+	dir := builtinCommandDir(exec)
+	if dir == "" {
+		return false
+	}
+	_, err := exec.FS.Stat(ctx, path.Join(dir, name))
+	return err == nil
 }
 
 type builtinInvocation struct {
@@ -1386,6 +1403,9 @@ type shebangResolution struct {
 	resolved    *resolvedCommand
 	interpreter string
 	batsRunner  bool
+	// binary 表示文件首行含 NUL 字节，即二进制可执行文件（不是 shell 脚本）。
+	// 无 shebang 的二进制文件不走脚本解释器，改经显式路径原生适配执行。
+	binary bool
 }
 
 func resolveShebangCommand(ctx context.Context, exec *Execution, fullPath, invokedPath string) (_ shebangResolution, ok bool, err error) {
@@ -1397,9 +1417,9 @@ func resolveShebangCommand(ctx context.Context, exec *Execution, fullPath, invok
 		_ = file.Close()
 	}()
 
-	line, ok, err := readShebangLine(file)
+	line, ok, binary, err := readShebangLine(file)
 	if err != nil || !ok {
-		return shebangResolution{}, ok, err
+		return shebangResolution{binary: binary}, ok, err
 	}
 	interpreterPath, shebangInterpreter, argv, ok := parseShebangInterpreter(line)
 	if !ok {
@@ -1436,10 +1456,26 @@ func resolveCommandFile(ctx context.Context, exec *Execution, fullPath string, m
 	if resolved, ok, err := resolveVirtualCommandStub(ctx, exec, fullPath); ok || err != nil {
 		return resolved, ok, err
 	}
-	if shebang, ok, err := resolveShebangCommand(ctx, exec, fullPath, invokedPath); ok || err != nil {
-		if err != nil {
-			return nil, false, err
+	shebang, shebangOk, err := resolveShebangCommand(ctx, exec, fullPath, invokedPath)
+	if err != nil {
+		return nil, false, err
+	}
+	if shebang.binary {
+		// 二进制可执行文件按显式程序路径处理：交宿主原生适配器执行（设计口径：
+		// 显式程序路径由原生适配器处理）；无原生能力的端（cloud/page）维持原有
+		// 的 126 文案。文本脚本（含或不含 shebang）仍在进程内解释，不成为绕过
+		// 命令注册表的通道。首行含 NUL 的 "#!" 前缀文件（二进制垃圾）也走此分支。
+		if cmd, ok := lookupRegistryCommand(exec, fullPath); ok {
+			return &resolvedCommand{
+				command: cmd,
+				name:    path.Base(fullPath),
+				path:    fullPath,
+				source:  "native-path",
+			}, true, nil
 		}
+		return nil, false, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: %s: cannot execute binary file", fullPath, fullPath)
+	}
+	if shebangOk {
 		if shebang.resolved != nil {
 			shebang.resolved.source = "shebang"
 			return shebang.resolved, true, nil
@@ -1561,23 +1597,25 @@ func parseVirtualCommandStub(line string) (string, bool) {
 	return name, true
 }
 
-func readShebangLine(r io.Reader) (line string, ok bool, err error) {
+func readShebangLine(r io.Reader) (line string, ok bool, binary bool, err error) {
 	var data [256]byte
 	n, err := r.Read(data[:])
 	switch {
 	case err == nil:
 	case errors.Is(err, io.EOF):
 	default:
-		return "", false, err
+		return "", false, false, err
 	}
+	firstLine, _, _ := bytes.Cut(data[:n], []byte{'\n'})
+	binary = bytes.IndexByte(firstLine, 0) >= 0
 	if n < 2 || string(data[:2]) != "#!" {
-		return "", false, nil
+		return "", false, binary, nil
 	}
 	line = string(data[:n])
 	if idx := strings.IndexByte(line, '\n'); idx >= 0 {
 		line = line[:idx]
 	}
-	return strings.TrimSpace(line[2:]), true, nil
+	return strings.TrimSpace(line[2:]), true, binary, nil
 }
 
 func parseShebangInterpreter(line string) (interpreterPath, name string, args []string, ok bool) {

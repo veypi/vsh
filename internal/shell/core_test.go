@@ -1552,3 +1552,129 @@ func TestCoreRunRecoversArrayInvalidTokenLikeBash(t *testing.T) {
 		t.Fatalf("stderr = %q, want %q", got, wantStderr)
 	}
 }
+
+// synthCommandRegistry 兜底合成任意未注册名字（模拟 host 侧原生 fallback：
+// Registry 未命中时也能合成命令）。A 缺陷（无 stub 的内置名被重写成
+// $BuiltinCommandDir 路径）只有在该类兜底下才会触发。
+type synthCommandRegistry struct {
+	*commands.Registry
+	ran []string
+}
+
+func (r *synthCommandRegistry) Lookup(name string) (commands.Command, bool) {
+	if cmd, ok := r.Registry.Lookup(name); ok {
+		return cmd, true
+	}
+	return commands.DefineCommand(name, func(ctx context.Context, inv *commands.Invocation) error {
+		r.ran = append(r.ran, name)
+		if inv.Stdout != nil {
+			_, _ = io.WriteString(inv.Stdout, "synthetic:"+name+"|"+strings.Join(inv.Args, " ")+"\n")
+		}
+		return nil
+	}), true
+}
+
+// A 缺陷回归：无 stub 标记文件的内置名（exit 等）不重写为 stub 路径，保持
+// 解释器派发。修复前 exit 会被重写成 /bin/exit 并报 "No such file or
+// directory"（127），即使 Registry 兜底能合成它。
+func TestCoreRunBuiltinWithoutStubStaysInterpreted(t *testing.T) {
+	t.Parallel()
+
+	registry := &synthCommandRegistry{Registry: newShellTestRegistry(t)}
+	fsys := newShellTestFS(t, "echo", "printf") // 故意不写 exit 垫片
+	var stdout, stderr strings.Builder
+
+	_, err := Run(context.Background(), &Execution{
+		Script:   "exit 3\n",
+		Registry: registry,
+		FS:       fsys,
+		Stdout:   &stdout,
+		Stderr:   &stderr,
+	})
+	var status interp.ExitStatus
+	if !errors.As(err, &status) || status != 3 {
+		t.Fatalf("Run() error = %v, want exit status 3 (stdout=%q stderr=%q)", err, stdout.String(), stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+// B 缺陷回归：显式程序路径的二进制文件（首行含 NUL）走 NativeFallback
+// （registry 路径命令），不再被当脚本交默认解释器（修复前报 126/权限失败）。
+func TestCoreRunExplicitBinaryPathUsesRegistry(t *testing.T) {
+	t.Parallel()
+
+	registry := &synthCommandRegistry{Registry: newShellTestRegistry(t)}
+	fsys := newShellTestFS(t)
+	mkdirAllShellTestFS(t, fsys, "/opt")
+	writeShellTestFile(t, fsys, "/opt/tool", "\x7fELF\x00\x01binary\n", 0o755)
+	var stdout, stderr strings.Builder
+
+	_, err := Run(context.Background(), &Execution{
+		Script:   "/opt/tool a1 b2\n",
+		Registry: registry,
+		FS:       fsys,
+		Stdout:   &stdout,
+		Stderr:   &stderr,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v (stderr=%q)", err, stderr.String())
+	}
+	if got, want := stdout.String(), "synthetic:/opt/tool|a1 b2\n"; got != want {
+		t.Fatalf("stdout = %q, want %q (stderr=%q)", got, want, stderr.String())
+	}
+}
+
+// B 无原生能力端（registry 无对应路径命令）：二进制显式路径报 126
+// "cannot execute binary file"，而非当脚本解释。
+func TestCoreRunExplicitBinaryPathWithoutNative(t *testing.T) {
+	t.Parallel()
+
+	fsys := newShellTestFS(t)
+	mkdirAllShellTestFS(t, fsys, "/opt")
+	writeShellTestFile(t, fsys, "/opt/tool", "\x7fELF\x00\x01binary\n", 0o755)
+	var stdout, stderr strings.Builder
+
+	_, err := Run(context.Background(), &Execution{
+		Script:   "/opt/tool\n",
+		Registry: newShellTestRegistry(t),
+		FS:       fsys,
+		Stdout:   &stdout,
+		Stderr:   &stderr,
+	})
+	var status interp.ExitStatus
+	if !errors.As(err, &status) || status != 126 {
+		t.Fatalf("Run() error = %v, want exit status 126 (stderr=%q)", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "cannot execute binary file") {
+		t.Fatalf("stderr = %q, want cannot-execute diagnostic", stderr.String())
+	}
+}
+
+// readShebangLine：首行含 NUL 的二进制文件被标记（binary），#! 脚本与非
+// 脚本文本保持原判定。
+func TestReadShebangLineDetectsBinaryFiles(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in     string
+		line   string
+		ok     bool
+		binary bool
+	}{
+		{"#!/bin/sh -e\necho hi\n", "/bin/sh -e", true, false},
+		{"plain text\n", "", false, false},
+		{"\x7fELF\x00\x01\x02", "", false, true},
+		{"", "", false, false},
+	}
+	for _, tc := range cases {
+		line, ok, binary, err := readShebangLine(strings.NewReader(tc.in))
+		if err != nil {
+			t.Fatalf("readShebangLine(%q) error = %v", tc.in, err)
+		}
+		if line != tc.line || ok != tc.ok || binary != tc.binary {
+			t.Fatalf("readShebangLine(%q) = (%q,%v,%v), want (%q,%v,%v)", tc.in, line, ok, binary, tc.line, tc.ok, tc.binary)
+		}
+	}
+}
