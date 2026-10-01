@@ -146,7 +146,7 @@
 - [x] 4.1.5 网络：default open / 私网阻断（含 169.254.169.254）/ 审计字段齐全 / 不触发审批——2026-09-24 实测（200 + 三例私网 code=7；审计字段在 .exec 日志未逐一核）
 - [~] 4.1.6 bg list/wait/kill 闭环 + 到期 124——2026-09-24 run/list/output/kill/wait 实测全通；到期 124 未实测（需 30min 墙钟）
 - [~] 4.1.7 panic 隔离；并发会话隔离——单测覆盖（2.1.4），未实地构造
-- [ ] 4.1.8 稳定性：连续 500 次 exec 无泄漏；Session P95 记录数值（对照 §10.0 基线）；可执行位结论
+- [x] 4.1.8 稳定性：连续 500 次 exec 无泄漏；Session P95 记录数值（对照 §10.0 基线）；可执行位结论——2026-09-30 TestEngineStability500（aic-pod libs/vsh）：n=500 P50=0.92ms P95=1.31ms max=2.14ms；goroutine Δ0、FD Δ0；并发 32 满载中 bg list 可用（RSS 维度 ps 在沙箱内不可用，以 goroutine+FD 为准）
 - [x] 4.1.9 page 受限语法文案 + help 原生自答——2026-09-24 实测（组合语法拒绝文案 ✓；`<cmd> --help` 覆盖 ✓；裸 help 为 bash 原生自答）
 - [x] 4.1.10 host：白名单外 127；grant cmd 审批后可用且与内建管道组合；OS 沙箱收容；`>` 重定向门控——2026-09-24 实测（python3 127 ✓、grant cmd + 管道 ✓、重定向门控 ✓；OS 沙箱收容未外部验证）
 - [~] 4.1.11 fs 五 action 三端回归；cp/mv/rm 下线报错；vcore 无残留；**配额闭环**（引擎内建写超限报错、fs 预检、rm 不拦）——2026-09-24 前三项实测过；配额机制就位（QuotaFS check）但实满测试未做
@@ -157,12 +157,12 @@
 - [x] 4.2.2 stub shadow 尝试（写同名真实文件，双端）——2026-09-24 实测 registry 优先不可劫持
 - [x] 4.2.3 脚本文件嵌套绕过（bash x.sh 内调未授权原生命令）——2026-09-24 实测 bash x.sh 内 python3 仍 127
 - [x] 4.2.4 分析→执行 TOCTOU 窗口利用尝试（确认仅影响报错文案）——文档化 by design
-- [ ] 4.2.5 配额绕过尝试（curl -o 大文件 / tar 解包 / 重定向追加）
+- [x] 4.2.5 配额绕过尝试（curl -o 大文件 / tar 解包 / 重定向追加）——2026-09-30 TestQuotaBypass*（aic-pod libs/vsh，引擎集成层实满）：三条路径写全部过 backing 闸门（重定向追加超限即 exit=1 配额报错锁死、tar 解包 8KiB 配额下中止于 3/8 成员、curl -o 跨线写计入用量后锁死）；顺带挖出并修复 F11/F12 两个真 bug
 
 ### 4.3 文档
 - [x] 4.3.1 `instruction_sets_v2` §5 推倒重写（exec script 模型 + fs 五 action + grant 语义）——2026-09-28 已落地（现行模型摘要 + 指向 hosts-vsh-redesign）
 - [x] 4.3.2 exec/fs 工具描述定稿（双轨口径 3.2.4 已落；2026-09-29 补：env 不跨 exec 持久提示、cloud 默认 workdir=会话目录、F5 预检整单拒口径）
-- [ ] 4.3.3 skills 文档过一遍：依赖 fs rg/ls 行为的写法、exec curl/json 的写法（office_studio / req_scope / relia_scope / comply_scope 等数据面技能确认走 page exec curl 不受影响）
+- [x] 4.3.3 skills 文档过一遍：依赖 fs rg/ls 行为的写法、exec curl/json 的写法（office_studio / req_scope / relia_scope / comply_scope 等数据面技能确认走 page exec curl 不受影响）——2026-09-30 sweep（/u/admin/skills 全部 md）：无 fs cp/mv/rm 残留、无 vcore/CheckLevel/WriteScope 旧口径；curl 用法均为 page 同源 api 调用或 cloud curl 内置，与现行契约一致，无需改动
 - [x] 4.3.4 permission_rules.md 重写；host_sandbox.md 同步 vbox 语义——2026-09-29 已落地（permission_rules 按 vbox first-wins 全量重写；host_sandbox 2026-09-28 已同步）
 - [x] 4.3.5 aic/docs/CHANGELOG.md 记录切换——2026-09-29 补 v0.16.0 条目（redesign 切换 / 模型层发布 / 文档整理 / F 清单复核批）
 
@@ -182,7 +182,7 @@
 | 存量 config 行序反转灵异 | M3.6.1 人工迁移 + FORK.md | [x] mbp 已确认无需改动（win pending 随 F7） |
 | analyze 写参表 90 内建工作量 | M2.5.2 估足，雏形演化自 fsRequirement | [x] 已落地；实测发现预检过严/误报记 F1/F3 |
 | fsauth/sandbox 测试重写量（2500+ 行） | M2.7.3 独立任务块，不与其他并行 | [x] vbox 侧新语义测试绿；3c 冒烟过（win 残项随 F7） |
-| 配额随 vcore 删除丢失 | M3.5.1 先迁移后删除，验收 4.1.11 闭环 | [~] QuotaFS 机制就位（check 闸门）；实满与绕过测试未做 |
+| 配额随 vcore 删除丢失 | M3.5.1 先迁移后删除，验收 4.1.11 闭环 | [x] 已关闭（2026-09-30：QuotaFS 单测 + 引擎集成实满（quota_bypass_test 三路径）全绿；线上真实配额实满未做——机制级覆盖已足） |
 
 ---
 
@@ -200,6 +200,17 @@
 | F8 | 偏差 | host stub 目录实为 sessions/.vsh-host/bin（共享），非 2.3.1 的 {session_root}/{sid}/bin | [x] by design（engine_vsh.go 文件头偏差 1 已记录：NewSession 无 sid 上下文 + registry 优先安全性等价；2026-09-29 复核，死代码 StubDirFor/PinStubs 已删） |
 | F9 | 审批 | 三次 grant（cloud fs / host fs / host cmd）均触发 4 级审批弹窗，用户手动批准——审批链正常 | [x] 已确认正常 |
 | F10 | 体验 | 前台 exec 自身注册进 bg 任务表占 bg-N id，`bg kill <自己>` 自杀（exit=130），id 语义易混 | [x] 已修（execwait 重构后前台不注册任务表，仅等待到期 Adopt——与 2026-09-29 拍板方案一致） |
+| F11 | 正确性 | NetClient.round `defer cancel()` 在 Do 返回即取消请求 ctx，响应体大于 transport 首包缓冲（~16KB 以上）读体必败 `context canceled`——cloud curl 大下载全挂，4.1.5 小响应未暴露 | [x] 已修（2026-09-30：cancel 所有权移交 Do，体读完关闭后再取消；aic-pod libs/vsh/netclient.go，复现 64KB 必现→修后 256KB 通过） |
+| F12 | 正确性 | shell 重定向 Close 错误静默丢弃（`_ = closers[i].Close()`）：虚拟 FS 缓冲写回在 Close 落盘，配额拒写/落盘失败被报成 exit 0——`>>` 追加超限静默丢数据 | [x] 已修（2026-09-30：vsh internal/shell/interp/runner.go 重定向 Close 错误终结语句 exit=1 + stderr 报错） |
+
+---
+
+## M6：配额与稳定性专项 + 执行可靠性（2026-09-30）
+
+- [x] M6.1 vbox Linux 规则转换修复（批次一）：evaluateFSPolicy 统一 first-wins 求值入口（替代 evaluateDenyTargets+nestedDenyHoles）——独立 ro 规则（可写根内只读子目录）落入挂载计划、同路径 ro→rw 行序失真消除（每路径求终局只出一个动作）、挂载参数改深度排序（深层后挂）；ro 通配行落在可写根/fsOpen 下无法精确表达 → fail-closed 拒启；windows 同步受益（可写白名单根内独立 ro 行补 ACE）；测试 TestEvaluateFSPolicy* 六用例 + 三平台构建/vet 绿。bwrap 实地验收待真实 linux 环境（同 W4 残项）
+- [x] M6.2 aic-pod 执行句柄取消竞态：ExecHandle 增加 cancelRequested——Cancel 先于 BindCancel 不再丢失（接入层预建句柄与 execwait 绑定墙钟 cancel 的竞态窗），TestExecHandleCancelBeforeBind/AfterBind 绿
+- [x] M6.3 配额绕过实测（4.2.5）+ 稳定性基线（4.1.8）+ skills 文档 sweep（4.3.3）：见上各条目；4.1.11 配额闭环机制级覆盖完成
+- [ ] M6.4 待定：request_id 内容去重（nonce 防重放已在，先观察）、aic context_length_exceeded 静态压缩兜底（用户评估方案中）
 
 ---
 

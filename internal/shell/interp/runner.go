@@ -1173,7 +1173,13 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt, hadPipeStatus bo
 	}
 	if !keepRedirs {
 		for i := len(closers) - 1; i >= 0; i-- {
-			_ = closers[i].Close()
+			// 虚拟 FS 上重定向的落盘发生在 Close（缓冲写回）——关闭错误
+			// 必须终结语句为非零退出，不得静默丢弃（此前配额拒写/落盘
+			// 失败会被报成 exit 0，2026-09-30 实测 `>>` 追加静默丢失）。
+			if err := closers[i].Close(); err != nil && r.exit.ok() {
+				r.errf("redirect: closing file: %v\n", err)
+				r.exit.code = 1
+			}
 		}
 	}
 	r.waitProcSubsts(procSubstStart)
