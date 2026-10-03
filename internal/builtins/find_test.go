@@ -33,7 +33,7 @@ func TestFindSkipsUnresolvableRelativeSymlinksDuringTraversal(t *testing.T) {
 	session := newSession(t, &Config{
 		FileSystem: CustomFileSystem(gbfs.FactoryFunc(func(context.Context) (gbfs.FileSystem, error) {
 			return gbfs.NewReadWrite(gbfs.ReadWriteOptions{Root: root})
-		}), defaultHomeDir),
+		}), "/"),
 		Policy: policy.NewStatic(&policy.Config{
 			ReadRoots:   []string{"/", "/usr/bin", "/bin"},
 			WriteRoots:  []string{"/"},
@@ -363,7 +363,7 @@ func TestFindTypeQueriesAvoidDirEntryInfoForKnownEntries(t *testing.T) {
 		FileSystem: CustomFileSystem(gbfs.FactoryFunc(func(context.Context) (gbfs.FileSystem, error) {
 			tracked = &infoCountingFS{FileSystem: gbfs.NewMemory()}
 			return tracked, nil
-		}), defaultHomeDir),
+		}), "/"),
 	})
 
 	writeSessionFile(t, session, "/bench/a.txt", []byte("a"))
@@ -390,7 +390,7 @@ func TestFindMetadataFreePrintfAvoidsDirEntryInfo(t *testing.T) {
 		FileSystem: CustomFileSystem(gbfs.FactoryFunc(func(context.Context) (gbfs.FileSystem, error) {
 			tracked = &infoCountingFS{FileSystem: gbfs.NewMemory()}
 			return tracked, nil
-		}), defaultHomeDir),
+		}), "/"),
 	})
 
 	writeSessionFile(t, session, "/printf/a.txt", []byte("a"))
@@ -418,7 +418,7 @@ func TestFindSymlinkBehavior(t *testing.T) {
 		session := newSession(t, &Config{
 			FileSystem: CustomFileSystem(gbfs.FactoryFunc(func(context.Context) (gbfs.FileSystem, error) {
 				return gbfs.NewMemory(), nil
-			}), defaultHomeDir),
+			}), "/"),
 			Policy: policy.NewStatic(&policy.Config{
 				ReadRoots:   []string{"/links", "/usr/bin", "/bin"},
 				WriteRoots:  []string{"/links"},
@@ -454,7 +454,7 @@ func TestFindSymlinkBehavior(t *testing.T) {
 		session := newSession(t, &Config{
 			FileSystem: CustomFileSystem(gbfs.FactoryFunc(func(context.Context) (gbfs.FileSystem, error) {
 				return gbfs.NewMemory(), nil
-			}), defaultHomeDir),
+			}), "/"),
 		})
 
 		writeSessionFile(t, session, "/links/target.txt", []byte("target"))
@@ -477,7 +477,7 @@ func TestFindSymlinkBehavior(t *testing.T) {
 		session := newSession(t, &Config{
 			FileSystem: CustomFileSystem(gbfs.FactoryFunc(func(context.Context) (gbfs.FileSystem, error) {
 				return gbfs.NewMemory(), nil
-			}), defaultHomeDir),
+			}), "/"),
 			Policy: policy.NewStatic(&policy.Config{
 				ReadRoots:   []string{"/links", "/usr/bin", "/bin"},
 				WriteRoots:  []string{"/links"},

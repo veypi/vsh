@@ -257,7 +257,7 @@ func TestXArgsAcceptsMaxProcsFlag(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "printf '/bin/sleep 2 && /bin/echo one\\n/bin/sleep 1 && /bin/echo two\\n/bin/echo three\\n' | xargs -P3 -n1 -IARG /bin/sh -c ARG\n",
+		Script: "printf 'sleep 2 && echo one\\nsleep 1 && echo two\\necho three\\n' | xargs -P3 -n1 -IARG env sh -c ARG\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -331,7 +331,7 @@ func TestXArgsShowLimitsReportsSerialMaximum(t *testing.T) {
 func TestXArgsRunsShebangScriptViaDirectExec(t *testing.T) {
 	t.Parallel()
 	session := newSession(t, &Config{})
-	writeSessionFile(t, session, "/tmp/xargs-script.sh", []byte("#!/bin/sh\nprintf '%s:%s\\n' \"$1\" \"$2\"\n"))
+	writeSessionFile(t, session, "/tmp/xargs-script.sh", []byte("#!env sh\nprintf '%s:%s\\n' \"$1\" \"$2\"\n"))
 
 	result, err := session.Exec(context.Background(), &ExecutionRequest{
 		Script: "chmod 755 /tmp/xargs-script.sh\nprintf 'left\\nright\\n' | xargs -n1 /tmp/xargs-script.sh fixed\n",
@@ -350,7 +350,7 @@ func TestXArgsRunsShebangScriptViaDirectExec(t *testing.T) {
 func TestXArgsVerboseOutputUsesShellEscapesWhenNeeded(t *testing.T) {
 	t.Parallel()
 	session := newSession(t, &Config{})
-	writeSessionFile(t, session, "/tmp/my command", []byte("#!/bin/sh\necho \"$@\"\n"))
+	writeSessionFile(t, session, "/tmp/my command", []byte("#!env sh\necho \"$@\"\n"))
 	writeSessionFile(t, session, "/tmp/xargs-null.bin", []byte("000\x0010 0\x0020\"0\x0030'0\x0040\n0\x00"))
 
 	result, err := session.Exec(context.Background(), &ExecutionRequest{

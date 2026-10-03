@@ -33,7 +33,7 @@ func (r *Runner) runChunked(ctx context.Context, reader io.Reader, name, topLeve
 	if !r.didReset {
 		r.Reset()
 	}
-	if r.Arg0 == "" && frame == nil && len(r.frames) == 0 && strings.TrimSpace(name) != "" {
+	if !r.Arg0Set && r.Arg0 == "" && frame == nil && len(r.frames) == 0 && strings.TrimSpace(name) != "" {
 		r.Arg0 = name
 	}
 

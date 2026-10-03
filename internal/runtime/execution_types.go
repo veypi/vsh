@@ -17,19 +17,20 @@ type ExecutionRequest struct {
 	ScriptPath      string
 	Script          string
 	Command         []string
-	CommandPath     string
-	CommandName     string
-	Args            []string
-	StartupOptions  []string
-	StartupHome     string
-	Env             map[string]string
-	WorkDir         string
-	Timeout         time.Duration
-	ReplaceEnv      bool
-	Interactive     bool
-	Stdin           io.Reader
-	Stdout          io.Writer
-	Stderr          io.Writer
+	// Argv0 overrides presentation only; Command[0] remains the lookup target.
+	Argv0          *string
+	Args           []string
+	StartupOptions []string
+	StartupHome    string
+	Env            map[string]string
+	SearchEnv      map[string]string
+	WorkDir        string
+	Timeout        time.Duration
+	ReplaceEnv     bool
+	Interactive    bool
+	Stdin          io.Reader
+	Stdout         io.Writer
+	Stderr         io.Writer
 }
 
 type ExecutionResult struct {
@@ -77,8 +78,8 @@ func executionRequestFromCommand(req *commands.ExecutionRequest) *ExecutionReque
 		ScriptPath:      req.ScriptPath,
 		Script:          req.Script,
 		Command:         cloneStrings(req.Command),
-		CommandPath:     req.CommandPath,
-		CommandName:     req.CommandName,
+		SearchEnv:       req.SearchEnv,
+		Argv0:           req.Argv0,
 		Args:            cloneStrings(req.Args),
 		StartupOptions:  cloneStrings(req.StartupOptions),
 		Env:             copyStringMap(req.Env),

@@ -32,35 +32,23 @@
         "kind": "call.expanded",
         "command": {
           "name": "echo",
-          "argv": ["echo", "hi"],
+          "argv": [
+            "echo",
+            "hi"
+          ],
           "dir": "/home/agent/project",
           "exit_code": 0,
           "builtin": true
         }
       },
       {
-        "kind": "command.start",
-        "command": {
-          "name": "/bin/echo",
-          "argv": ["/bin/echo", "hi"],
-          "dir": "/home/agent/project",
-          "exit_code": 0
-        }
-      },
-      {
-        "kind": "command.exit",
-        "command": {
-          "name": "/bin/echo",
-          "argv": ["/bin/echo", "hi"],
-          "dir": "/home/agent/project",
-          "exit_code": 0
-        }
-      },
-      {
         "kind": "call.expanded",
         "command": {
           "name": "cat",
-          "argv": ["cat", "note.txt"],
+          "argv": [
+            "cat",
+            "note.txt"
+          ],
           "dir": "/home/agent/project",
           "exit_code": 0
         }
@@ -69,7 +57,10 @@
         "kind": "command.start",
         "command": {
           "name": "cat",
-          "argv": ["cat", "note.txt"],
+          "argv": [
+            "cat",
+            "note.txt"
+          ],
           "dir": "/home/agent/project",
           "exit_code": 0
         }
@@ -85,7 +76,10 @@
         "kind": "command.exit",
         "command": {
           "name": "cat",
-          "argv": ["cat", "note.txt"],
+          "argv": [
+            "cat",
+            "note.txt"
+          ],
           "dir": "/home/agent/project",
           "exit_code": 0
         }
@@ -104,7 +98,10 @@
         "kind": "call.expanded",
         "command": {
           "name": "cat",
-          "argv": ["cat", "missing.txt"],
+          "argv": [
+            "cat",
+            "missing.txt"
+          ],
           "dir": "/home/agent/project",
           "exit_code": 0
         }
@@ -113,7 +110,10 @@
         "kind": "command.start",
         "command": {
           "name": "cat",
-          "argv": ["cat", "missing.txt"],
+          "argv": [
+            "cat",
+            "missing.txt"
+          ],
           "dir": "/home/agent/project",
           "exit_code": 0
         }
@@ -129,7 +129,10 @@
         "kind": "command.exit",
         "command": {
           "name": "cat",
-          "argv": ["cat", "missing.txt"],
+          "argv": [
+            "cat",
+            "missing.txt"
+          ],
           "dir": "/home/agent/project",
           "exit_code": 1
         }

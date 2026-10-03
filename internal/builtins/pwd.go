@@ -65,7 +65,6 @@ func (c *Pwd) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCom
 	if err != nil {
 		return exitf(inv, 1, "pwd: failed to get current directory: %s", pwdErrorDetail(err))
 	}
-	cwd = compatHostPwdPath(inv, cwd)
 	if _, err := fmt.Fprintln(inv.Stdout, cwd); err != nil {
 		return &ExitError{Code: 1, Err: err}
 	}
@@ -88,11 +87,6 @@ func resolvePwdOutput(ctx context.Context, inv *Invocation, opts pwdOptions) (st
 }
 
 func pwdPhysicalPath(ctx context.Context, inv *Invocation) (string, error) {
-	if inv != nil && inv.Env != nil {
-		if compatPhysical := strings.TrimSpace(inv.Env["VSH_COMPAT_PHYSICAL_PWD"]); path.IsAbs(compatPhysical) {
-			return compatPhysical, nil
-		}
-	}
 	if inv == nil || inv.FS == nil {
 		return "/", nil
 	}
@@ -155,25 +149,6 @@ func pwdErrorDetail(err error) string {
 		return "unknown error"
 	}
 	return err.Error()
-}
-
-func compatHostPwdPath(inv *Invocation, cwd string) string {
-	if inv == nil || inv.Env == nil || !path.IsAbs(cwd) {
-		return cwd
-	}
-	root := strings.TrimSpace(inv.Env["VSH_COMPAT_ROOT"])
-	if root == "" || !path.IsAbs(root) {
-		return cwd
-	}
-	root = path.Clean(root)
-	cwd = path.Clean(cwd)
-	if root == "/" {
-		return cwd
-	}
-	if cwd == "/" {
-		return root
-	}
-	return path.Join(root, strings.TrimPrefix(cwd, "/"))
 }
 
 const pwdVersionText = `pwd (vsh)

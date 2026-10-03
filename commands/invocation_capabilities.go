@@ -25,6 +25,8 @@ type FetchFunc func(context.Context, *network.Request) (*network.Response, error
 // Most embedders will not construct these directly in production code; they are
 // mainly useful for tests, integration helpers, and custom runtime wiring.
 type InvocationOptions struct {
+	// Argv0 is an optional presentation override, never a command identity.
+	Argv0                 *string
 	Args                  []string
 	Env                   map[string]string
 	Cwd                   string
@@ -39,6 +41,7 @@ type InvocationOptions struct {
 	Trace                 trace.Recorder
 	Exec                  func(context.Context, *ExecutionRequest) (*ExecutionResult, error)
 	Interact              func(context.Context, *InteractiveRequest) (*InteractiveResult, error)
+	LookupCommand         LookupCommandFunc
 	GetRegisteredCommands func() []string
 }
 
@@ -64,6 +67,7 @@ func NewInvocation(opts *InvocationOptions) *Invocation {
 	}
 
 	inv := &Invocation{
+		Argv0:                 opts.Argv0,
 		Args:                  append([]string(nil), opts.Args...),
 		Env:                   cloneEnv(opts.Env),
 		Cwd:                   gbfs.Resolve("/", opts.Cwd),
@@ -74,6 +78,7 @@ func NewInvocation(opts *InvocationOptions) *Invocation {
 		setTime:               opts.SetTime,
 		Exec:                  opts.Exec,
 		Interact:              opts.Interact,
+		LookupCommand:         opts.LookupCommand,
 		GetRegisteredCommands: getCommands,
 		trace:                 opts.Trace,
 	}

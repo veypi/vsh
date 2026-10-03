@@ -1,11 +1,9 @@
 # vsh
 
-Status: 上游基线产品说明（gbash 时代草稿，2026-04-04，保留作定位参考）
+Status: 公开版架构契约，2026-10-03（其余语言能力沿用 fork 基线）。
 
-> fork 后的行为差异与定案以 [FORK.md](FORK.md) 为准；平台集成契约见 aic-pod
-> `docs/hosts-vsh-redesign.md` 与 `docs/hosts-tools.md`。注意：fork 已支持 host
-> 型执行（显式程序路径与原生二进制由集成层经规则表装配），文中 “unknown
-> commands never fall through to the host OS” 等表述仅描述上游基线的默认形态。
+> 命令解析、FS 初始化和 NativeExec 以本文当前契约为准；fork 来源见 [FORK.md](FORK.md)。
+> NativeExec 由 embedder 显式注入，默认关闭；未知名字永不直接交给宿主 OS。
 
 ## 1. Purpose
 
@@ -27,10 +25,10 @@ The target is not "Bash in Go". The target is a practical shell-shaped runtime f
 
 - it accepts shell-like scripts and command snippets
 - it evaluates a pragmatic subset of shell semantics
-- it runs entirely inside a sandboxed runtime
+- it runs inside the configured FS/policy boundary; optional NativeExec delegates real binaries to an explicit host adapter
 - it can expose structured traces and lifecycle logs for agent debugging and orchestration when the embedder opts in
 - it uses a virtual filesystem unless a caller explicitly installs another sandboxed backend
-- it never executes unknown commands on the host
+- it never delegates unresolved names to the host
 
 The runtime is optimized for LLM and agent workloads:
 
@@ -59,7 +57,7 @@ The runtime is optimized for LLM and agent workloads:
 
 - implement full GNU Bash behavior
 - provide job control, readline-style history navigation/editing, or host TTY emulation
-- support host subprocess passthrough
+- provide implicit host subprocess passthrough
 - support a user-facing compatibility mode as part of the default runtime contract
 - default to the host filesystem
 - silently emulate missing commands with host binaries
@@ -110,7 +108,7 @@ Audited builtin families are also part of that shell profile. `caller`, `compgen
 
 The shell builtin `printf` remains a Bash compatibility boundary: numeric conversions must accept quoted character constants such as `"'A"` and `"\"B"`, `%q` and `${var@Q}` must emit Bash-compatible shell-escaped strings, `%b` and bare format-string escapes must honor Bash's escape decoding rules, `%(... )T` must consult only exported `TZ`, and write failures must still surface shell status `1` after any partial output or diagnostics.
 
-The registry-backed `/bin/printf` command is a GNU/coreutils compatibility boundary instead. It must follow GNU operand parsing and diagnostics, use GNU `%q` shell quoting and escape handling, reject Bash-only `%(... )T`, and not implement the shell builtin's `-v` assignment mode. `--help` and `--version` remain outside this compatibility scope for now.
+The registry-backed `printf` command (reachable with `env printf`) is a GNU/coreutils compatibility boundary instead. It must follow GNU operand parsing and diagnostics, use GNU `%q` shell quoting and escape handling, reject Bash-only `%(... )T`, and not implement the shell builtin's `-v` assignment mode. `--help` and `--version` remain outside this compatibility scope for now.
 
 Shell builtins that remain implemented inside the in-tree interpreter should preserve the Bash-facing option contracts we depend on for conformance. Current requirements include Bash-compatible `type` resolution and reporting for `-a`, `-f`, `-p`, `-P`, and `-t` across aliases, functions, builtins, keywords, and PATH files; Bash-compatible `enable` support for the real in-tree runner builtins, including `-n`, `-p`, `-a`, `-s`, and disabled-builtin effects on lookup and `builtin` dispatch; `ulimit -a` reporting that writes through the shell's redirected stdout and fails the command when that write fails; plus Bash-compatible `set -C` / `set +C`, `set -o noclobber` / `set +o noclobber`, and `set -o posix` / `set +o posix` handling. Disabled builtins must disappear from `compgen -A command` unless a PATH command of the same name exists, while `compgen -A builtin`, `compgen -A helptopic`, and default `help` output must continue to advertise them as disabled rather than absent. In POSIX mode, direct POSIX special builtins must outrank shell functions during command lookup, report as builtins via `type`, and keep prefix assignments in the current shell rather than treating them as temporary exported command variables; disabling one with `enable -n` must remove that special-builtin behavior until it is re-enabled.
 
@@ -172,7 +170,7 @@ The CLI also provides a minimal interactive shell mode. That mode is a front-end
 - it executes each completed entry via `Session.Exec`, using the same runner-backed parser construction that feeds live alias state into parse-time expansion
 - it carries forward the virtual cwd and shell-visible variable state between entries at the CLI layer
 - it may expose session-local command history via the `history` command, with entries stored in `BASH_HISTORY`
-- it supports programmable completion state via the `complete`, `compgen`, and `compopt` shell builtins; bare calls plus `builtin ...` and `command ...` dispatch resolve to those shell builtins, while `/bin/complete`, `/bin/compgen`, and `/bin/compopt` expose the same shared completion logic as command wrappers; the shipped CLI still does not provide a readline/tab-completion frontend
+- it supports programmable completion state via the `complete`, `compgen`, and `compopt` shell builtins; bare calls plus `builtin ...` and `command ...` dispatch resolve to those shell builtins, there are no registered wrappers or synthetic files for these stateful builtins; the shipped CLI still does not provide a readline/tab-completion frontend
 
 The normal CLI entrypoint also accepts filesystem selection flags before the shell arguments:
 
@@ -264,20 +262,11 @@ Recommended v1 non-goals:
 - signal forwarding and job control
 - restart-persistent sessions
 
-### 6.3 Default sandbox layout
+### 6.3 Filesystem initialization
 
-The default in-memory sandbox should look Unix-like enough for agent scripts:
+The FS factory owns initial directories. The default memory factory prepares `/home/agent` and sticky `/tmp`. Custom factories must provide their own cwd; Session validates it and never creates directories based on HOME, PATH or Registry changes. Device/proc views and actual temporary IO retain their dedicated implementations.
 
-- `/home/agent` as the default home and working directory
-- `/tmp` for scratch files, created with sticky-bit semantics
-- `/dev` as a small runtime-owned device namespace
-- `/dev/null` as a character device that always reads EOF and discards writes
-- `/dev/urandom` as a character device that yields a deterministic pseudo-random byte stream and discards writes
-- `/dev/zero` as a character device that yields zero bytes on reads and discards writes
-- `/bin` and `/usr/bin` as virtual command locations
-- deterministic identity defaults via `USER=agent`, `LOGNAME=agent`, `GROUP=agent`, `GROUPS=1000`, `UID=1000`, `EUID=1000`, `GID=1000`, and `EGID=1000`
-
-Commands remain registry-backed Go implementations. `/bin/ls` and similar paths are virtual command identities, not host executables.
+Commands are registry entries, never files. There is no LayoutFS, BuiltinCommandDir, layout reconciliation, stub marker or filesystem rewrite for registered commands. `/bin/ls` always refers to a real file in the supplied FS. Changes to Registry or PATH cannot create, remove or chmod files.
 
 Ownership name resolution for commands such as `ls`, `chown`, and `chgrp` must come from those runtime identity defaults plus sandbox-visible `/etc/passwd` and `/etc/group` data when present. The runtime must not consult host account databases outside the sandbox contract.
 
@@ -692,24 +681,25 @@ The runner exec handler is the command dispatch path for non-builtin, non-functi
 Flow:
 
 1. receive expanded argv from the shell interpreter
-2. resolve `argv[0]` against virtual command paths from the current `PATH`, or against an explicit virtual path such as `/bin/ls`
+2. resolve bare `argv[0]` through the configured command registry first, then the command hash and current `PATH`; resolve explicit paths such as `/bin/ls` through the virtual filesystem
 3. if missing, write a shell-style error to stderr and return exit status `127`
 4. if present, run the Go command implementation
 5. convert command errors into shell exit status errors
 6. emit start/finish trace events when tracing is enabled
 
-This preserves shell syntax while keeping all execution inside Go.
+This preserves shell syntax while making any native execution an explicit embedding decision.
 
-User-visible command lookup rules for MVP:
+User-visible command lookup:
 
-- bare command names only resolve if the current `PATH` includes a virtual command stub for that name
-- bare-name resolution is cached per shell session in a Bash-style hash table keyed by command name
-- cached bare-name entries store the shell-visible path candidate, so relative PATH entries stay relative until invalidated
-- `hash` exposes that table: `hash` prints it, `hash name ...` pre-resolves entries with zero hits, and `hash -r` clears it before optionally re-hashing any remaining names
-- cached entries are invalidated only by `hash -r` or any reassignment/unset of `PATH`; otherwise the shell keeps using the cached path even if a different earlier PATH entry appears later
-- changing `PATH` can intentionally disable bare-name resolution
-- explicit virtual paths such as `/bin/ls` bypass `PATH`
-- there is no direct registry fallback for user-visible commands
+- Interpreter semantics choose alias/function/builtin; stateful builtins exist only in the interpreter.
+- External bare names check Registry first, then real PATH files. Explicit paths select real files only. Windows command operands normalize to the Unix-shaped FS namespace; PATH remains a colon-separated list of normalized directories, while PATHEXT controls suffix search.
+- One injected-FS resolver serves execution, type, command -v, which, hash and nested calls. Registry hits do not need PATH, never enter the file hash and never fall through after rejection or failure.
+- `command -v` and `which` report registered names without a fake path; `type -t` reports `registered`; `type -P` searches only real files. Completion includes actual shell builtins, Registry and real files.
+- Real file hashes store resolved absolute paths; PATH assignment/unset and hash -r invalidate them. Relative PATH candidates are resolved against cwd before storage.
+- Executable text uses the supported shell shebang or default shell; non-shell explicit interpreters must resolve as real files. env shebangs preserve their options and use normal nested command resolution. Bats execution still reports unsupported.
+- Binary files call optional `NativeExec(ctx, resolvedPath, inv)`. The absolute resolved path is authoritative; the adapter cannot replace it by a second name/PATH lookup. No callback means status 126. Missing targets return 127; access/executable errors return 126; a started program's status is preserved.
+- Invocation.Exec accepts tokenized Command plus separate SearchEnv and Env. Argv0 changes presentation only, including the empty string; resolution, command rules and authorization still use Command[0]/resolved identity. `env`, `xargs`, `find -exec` and `timeout` share this entry point.
+- VSH_COMPAT_ROOT and VSH_COMPAT_PHYSICAL_PWD no longer remap runtime paths or override filesystem facts.
 
 ## 10. Filesystem Model
 
@@ -776,7 +766,7 @@ Backend boundary for the current implementation:
 - `OverlayFS` is intended for internal session use and is exposed through `gbfs.Overlay(...)`
 - `MountableFS` is an opt-in namespace backend exposed through `gbfs.Mountable(...)` and `vsh.MountableFileSystem(...)`; live `mount` and `unmount` behavior remains a concrete-backend capability rather than part of the core filesystem interface
 - `SnapshotFS` is a read-only backend for deterministic fixtures and direct tests
-- `SnapshotFS` is not the default `runtime` session backend because session bootstrap still creates the sandbox layout and command stubs
+- `SnapshotFS` is not the default `runtime` session backend because the default runtime requires a mutable filesystem for ordinary shell writes
 - the common host-project workflow should be represented as a high-level runtime helper that mounts a read-only host tree under an in-memory overlay and starts the session in that mounted directory
 - the `@ewhauser/vsh-wasm` bridge should expose the same seeded-memory model for `files`, including lazy per-path providers, rather than eagerly writing every file after session creation
 

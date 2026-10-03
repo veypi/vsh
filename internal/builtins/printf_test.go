@@ -167,7 +167,7 @@ func TestPrintfBuiltinAndBinPrintfSplitDashVMode(t *testing.T) {
 		Script: "foo=old\n" +
 			"printf -v foo %s hi\n" +
 			"printf 'builtin=<%s>\\n' \"$foo\"\n" +
-			"/bin/printf -v foo %s hi\n" +
+			"env printf -v foo %s hi\n" +
 			"printf '\\n/bin=<%s>\\n' \"$foo\"\n",
 	})
 	if err != nil {
@@ -190,7 +190,7 @@ func TestPrintfBuiltinAndBinPrintfSplitQQuoting(t *testing.T) {
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
 		Script: "printf 'builtin=[%q]\\n' 'a b'\n" +
-			"/bin/printf 'bin=[%q]\\n' 'a b'\n",
+			"env printf 'bin=[%q]\\n' 'a b'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -213,7 +213,7 @@ func TestPrintfBuiltinAndBinPrintfSplitTimeConversion(t *testing.T) {
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
 		Script: "export TZ=UTC\n" +
 			"printf 'builtin=[%(%F)T]\\n' 0\n" +
-			"/bin/printf '%(%F)T' 0\n" +
+			"env printf '%(%F)T' 0\n" +
 			"printf '\\nstatus=%s\\n' \"$?\"\n",
 	})
 	if err != nil {
@@ -235,8 +235,8 @@ func TestBinPrintfSupportsGNUIndexedFormats(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "/bin/printf '%2$s%1$s\\n' 1 2\n" +
-			"/bin/printf '%1$*2$.*3$d\\n' 1 3 2\n",
+		Script: "env printf '%2$s%1$s\\n' 1 2\n" +
+			"env printf '%1$*2$.*3$d\\n' 1 3 2\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)

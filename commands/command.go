@@ -31,6 +31,8 @@ type CommandFunc func(ctx context.Context, inv *Invocation) error
 // [Invocation.Fetch], nested execution through [Invocation.Exec], and whole-input
 // reads through [ReadAll] or [ReadAllStdin].
 type Invocation struct {
+	// Argv0 is an optional presentation override, never a command identity.
+	Argv0                 *string
 	Args                  []string
 	Env                   map[string]string
 	Cwd                   string
@@ -42,6 +44,7 @@ type Invocation struct {
 	Exec                  func(context.Context, *ExecutionRequest) (*ExecutionResult, error)
 	Interact              func(context.Context, *InteractiveRequest) (*InteractiveResult, error)
 	Limits                policy.Limits
+	LookupCommand         LookupCommandFunc
 	GetRegisteredCommands func() []string
 
 	trace   trace.Recorder

@@ -11,7 +11,7 @@ func TestPathBasedCommandResolution(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "/bin/echo hi\n/usr/bin/pwd\n",
+		Script: "env echo hi\nenv pwd\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -37,7 +37,7 @@ func TestBareCommandResolutionRespectsPATH(t *testing.T) {
 	if result.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0", result.ExitCode)
 	}
-	for _, entry := range []string{"bin", "dev", "home", "tmp", "usr"} {
+	for _, entry := range []string{"dev", "home", "tmp"} {
 		if !containsLine(strings.Split(strings.TrimSpace(result.Stdout), "\n"), entry) {
 			t.Fatalf("Stdout missing root entry %q: %q", entry, result.Stdout)
 		}
@@ -78,7 +78,7 @@ func TestBareRealFileResolutionStillRespectsPATH(t *testing.T) {
 			"PATH=/tmp/bin:/bin",
 			"mycmd",
 			"PATH=",
-				"definitely_missing_cmd",
+			"definitely_missing_cmd",
 			"echo unknown=$?",
 		}, "\n") + "\n",
 	})
@@ -95,7 +95,7 @@ func TestExplicitPathResolutionBypassesPATH(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "PATH=\n/bin/ls /\n",
+		Script: "printf 'ls /\\n' > /tmp/list; chmod +x /tmp/list; PATH=; /tmp/list\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -103,7 +103,7 @@ func TestExplicitPathResolutionBypassesPATH(t *testing.T) {
 	if result.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0", result.ExitCode)
 	}
-	for _, entry := range []string{"bin", "dev", "home", "tmp", "usr"} {
+	for _, entry := range []string{"dev", "home", "tmp"} {
 		if !containsLine(strings.Split(strings.TrimSpace(result.Stdout), "\n"), entry) {
 			t.Fatalf("Stdout missing root entry %q: %q", entry, result.Stdout)
 		}
@@ -253,7 +253,7 @@ func TestDisabledBuiltinsEnvAffectsDirectShellFileExec(t *testing.T) {
 		Env: map[string]string{
 			"VSH_DISABLED_BUILTINS": "printf",
 		},
-		Command: []string{"/bin/sh", "/tmp/child.sh"},
+		Command: []string{"sh", "/tmp/child.sh"},
 	})
 	if err != nil {
 		t.Fatalf("Exec() error = %v", err)

@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"context"
+	"io/fs"
 	"strings"
 
 	gbfs "github.com/veypi/vsh/fs"
@@ -35,7 +37,7 @@ type ReadWriteDirectoryOptions struct {
 // InMemoryFileSystem returns the default session filesystem setup.
 func InMemoryFileSystem() FileSystemConfig {
 	return FileSystemConfig{
-		Factory:    gbfs.Memory(),
+		Factory:    memoryFactory(nil),
 		WorkingDir: defaultHomeDir,
 	}
 }
@@ -44,7 +46,7 @@ func InMemoryFileSystem() FileSystemConfig {
 // provided files.
 func SeededInMemoryFileSystem(files gbfs.InitialFiles) FileSystemConfig {
 	return FileSystemConfig{
-		Factory:    gbfs.SeededMemory(files),
+		Factory:    memoryFactory(files),
 		WorkingDir: defaultHomeDir,
 	}
 }
@@ -59,6 +61,9 @@ func CustomFileSystem(factory gbfs.Factory, workingDir string) FileSystemConfig 
 
 // MountableFileSystem returns a multi-mount filesystem configuration.
 func MountableFileSystem(opts MountableFileSystemOptions) FileSystemConfig {
+	if opts.Base == nil {
+		opts.Base = memoryFactory(nil)
+	}
 	workingDir := strings.TrimSpace(opts.WorkingDir)
 	if workingDir == "" {
 		workingDir = defaultHomeDir
@@ -105,7 +110,7 @@ func ReadWriteDirectoryFileSystem(root string, opts ReadWriteDirectoryOptions) F
 
 func (cfg FileSystemConfig) resolved() FileSystemConfig {
 	if cfg.Factory == nil {
-		cfg.Factory = gbfs.Memory()
+		cfg.Factory = memoryFactory(nil)
 	}
 	cfg.WorkingDir = strings.TrimSpace(cfg.WorkingDir)
 	if cfg.WorkingDir == "" {
@@ -113,4 +118,22 @@ func (cfg FileSystemConfig) resolved() FileSystemConfig {
 	}
 	cfg.WorkingDir = gbfs.Clean(cfg.WorkingDir)
 	return cfg
+}
+
+// The memory filesystem factory owns its initial directories. Sessions never
+// mutate the filesystem to reflect command registrations or HOME/PATH changes.
+func memoryFactory(files gbfs.InitialFiles) gbfs.Factory {
+	return gbfs.FactoryFunc(func(ctx context.Context) (gbfs.FileSystem, error) {
+		mem, err := gbfs.SeededMemory(files).New(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := mem.MkdirAll(ctx, defaultHomeDir, 0755); err != nil {
+			return nil, err
+		}
+		if err := mem.MkdirAll(ctx, defaultTempDir, fs.ModeSticky|0777); err != nil {
+			return nil, err
+		}
+		return mem, nil
+	})
 }

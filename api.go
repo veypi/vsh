@@ -123,12 +123,8 @@ type Config struct {
 	// applies to both non-interactive and interactive shell execution.
 	AnalysisObserver analysis.Observer
 
-	// BuiltinCommandDir is the virtual directory used to resolve rewritten shell
-	// builtin names (echo/bg/help/…) to registry commands via on-disk stubs.
-	// Empty defaults to "/bin" — correct when the filesystem has a writable
-	// /bin (in-memory layer). Host-style filesystems without a memory layer
-	// must point this at their real stub directory (the PATH stub dir).
-	BuiltinCommandDir string
+	// NativeExec executes an already resolved real file. Nil disables native execution.
+	NativeExec func(context.Context, string, *commands.Invocation) error
 }
 
 // FileSystemConfig describes how vsh provisions a session filesystem.
@@ -268,18 +264,18 @@ func (cfg *Config) runtimeConfig() *internalruntime.Config {
 		return &internalruntime.Config{}
 	}
 	return &internalruntime.Config{
-		FileSystem:        cfg.FileSystem.runtimeConfig(),
-		Registry:          cfg.Registry,
-		Policy:            cfg.Policy,
-		LimitOverrides:    cfg.LimitOverrides,
-		BaseEnv:           copyStringMap(cfg.BaseEnv),
-		Host:              cfg.Host,
-		Network:           cfg.networkConfig(),
-		NetworkClient:     cfg.NetworkClient,
-		Tracing:           cfg.Tracing,
-		Logger:            cfg.Logger,
-		AnalysisObserver:  cfg.AnalysisObserver,
-		BuiltinCommandDir: cfg.BuiltinCommandDir,
+		FileSystem:       cfg.FileSystem.runtimeConfig(),
+		Registry:         cfg.Registry,
+		Policy:           cfg.Policy,
+		LimitOverrides:   cfg.LimitOverrides,
+		BaseEnv:          copyStringMap(cfg.BaseEnv),
+		Host:             cfg.Host,
+		Network:          cfg.networkConfig(),
+		NetworkClient:    cfg.NetworkClient,
+		Tracing:          cfg.Tracing,
+		Logger:           cfg.Logger,
+		AnalysisObserver: cfg.AnalysisObserver,
+		NativeExec:       cfg.NativeExec,
 	}
 }
 
@@ -343,19 +339,14 @@ func DefaultRegistry() *commands.Registry {
 // This is the same filesystem layout vsh uses when [New] is called without a
 // filesystem option.
 func InMemoryFileSystem() FileSystemConfig {
-	return FileSystemConfig{
-		Factory:    gbfs.Memory(),
-		WorkingDir: "/home/agent",
-	}
+	cfg := internalruntime.InMemoryFileSystem()
+	return FileSystemConfig{Factory: cfg.Factory, WorkingDir: cfg.WorkingDir}
 }
 
-// SeededInMemoryFileSystem returns an in-memory filesystem configuration
-// preloaded with the provided files.
+// SeededInMemoryFileSystem prepares the default home/tmp and provided files.
 func SeededInMemoryFileSystem(files gbfs.InitialFiles) FileSystemConfig {
-	return FileSystemConfig{
-		Factory:    gbfs.SeededMemory(files),
-		WorkingDir: InMemoryFileSystem().WorkingDir,
-	}
+	cfg := internalruntime.SeededInMemoryFileSystem(files)
+	return FileSystemConfig{Factory: cfg.Factory, WorkingDir: cfg.WorkingDir}
 }
 
 // CustomFileSystem wires an arbitrary filesystem factory into the runtime.
@@ -371,6 +362,9 @@ func CustomFileSystem(factory gbfs.Factory, workingDir string) FileSystemConfig 
 
 // MountableFileSystem returns a multi-mount filesystem configuration.
 func MountableFileSystem(opts MountableFileSystemOptions) FileSystemConfig {
+	if opts.Base == nil {
+		opts.Base = InMemoryFileSystem().Factory
+	}
 	workingDir := strings.TrimSpace(opts.WorkingDir)
 	if workingDir == "" {
 		workingDir = InMemoryFileSystem().WorkingDir
@@ -406,7 +400,7 @@ func (f hostDirectoryFactory) WithMaxFileReadBytes(maxBytes int64) gbfs.Factory 
 // HostDirectoryFileSystem mounts a real host directory into the sandbox under a
 // writable in-memory overlay.
 //
-// The mounted host tree is read-only. All writes, deletes, and command stubs
+// The mounted host tree is read-only. All writes and deletes
 // live in the in-memory upper layer, so shell activity never mutates the host
 // directory directly.
 func HostDirectoryFileSystem(root string, opts HostDirectoryOptions) FileSystemConfig {

@@ -43,8 +43,6 @@ var shellBuiltinNames = []string{
 	":",
 	".",
 	"alias",
-	"bg",
-	"bind",
 	"break",
 	"builtin",
 	"caller",
@@ -56,7 +54,6 @@ var shellBuiltinNames = []string{
 	"continue",
 	"declare",
 	"dirs",
-	"disown",
 	"echo",
 	"enable",
 	"eval",
@@ -64,19 +61,10 @@ var shellBuiltinNames = []string{
 	"exit",
 	"export",
 	"false",
-	"fc",
-	"fg",
 	"getopts",
 	"hash",
-	"help",
-	"history",
-	"jobs",
-	"kill",
-	"let",
 	"local",
-	"logout",
 	"mapfile",
-	"newgrp",
 	"popd",
 	"printf",
 	"pushd",
@@ -89,7 +77,6 @@ var shellBuiltinNames = []string{
 	"shift",
 	"shopt",
 	"source",
-	"suspend",
 	"test",
 	"times",
 	"trap",
@@ -97,7 +84,6 @@ var shellBuiltinNames = []string{
 	"type",
 	"typeset",
 	"ulimit",
-	"umask",
 	"unalias",
 	"unset",
 	"wait",
@@ -624,7 +610,14 @@ func ApplyComplete(state *shellstate.CompletionState, backend Backend, cfg *Comp
 		return nil, nil
 	}
 	if cfg.PrintMode {
-		return PrintCompletionSpecs(state, cfg.Commands)
+		names := append([]string(nil), cfg.Commands...)
+		if cfg.IsDefault {
+			names = append(names, shellstate.CompletionSpecDefaultKey)
+		}
+		if cfg.IsEmptyLine {
+			names = append(names, shellstate.CompletionSpecEmptyKey)
+		}
+		return PrintCompletionSpecs(state, names)
 	}
 	if len(cfg.Commands) == 0 && !cfg.IsDefault && !cfg.IsEmptyLine {
 		if !cfg.HasWordlist && !cfg.HasFunction && !cfg.HasCommand && !cfg.HasFilter &&

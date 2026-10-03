@@ -1239,7 +1239,7 @@ func TestLookupCommandPrefersRegistryOverRealExecutable(t *testing.T) {
 	if got, want := resolved.name, "tr"; got != want {
 		t.Fatalf("resolved.name = %q, want %q", got, want)
 	}
-	if got, want := resolved.path, "/bin/tr"; got != want {
+	if got, want := resolved.path, ""; got != want {
 		t.Fatalf("resolved.path = %q, want %q", got, want)
 	}
 	if got, want := resolved.source, "registry"; got != want {
@@ -1350,7 +1350,7 @@ func TestCoreRunHashWithArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v, stdout=%q, stderr=%q", err, stdout.String(), stderr.String())
 	}
-	if got, want := stdout.String(), "status=0\nhits\tcommand\n   0\t/bin/whoami\nstatus=1\n"; got != want {
+	if got, want := stdout.String(), "status=0\nhash: hash table empty\nstatus=1\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got, want := stderr.String(), "hash: _nonexistent_: not found\n"; got != want {
@@ -1434,7 +1434,7 @@ func TestCoreRunPathCacheKeepsDeletedEntryStale(t *testing.T) {
 	if got, want := stdout.String(), "two\nstatus=0\nstatus=127\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
-	if got, want := stderr.String(), "two/mycmd: No such file or directory\n"; got != want {
+	if got, want := stderr.String(), "/tmp/two/mycmd: No such file or directory\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }
@@ -1482,16 +1482,7 @@ func newShellTestFS(t testing.TB, names ...string) gbfs.FileSystem {
 	if err := fsys.MkdirAll(context.Background(), "/bin", 0o755); err != nil {
 		t.Fatalf("MkdirAll(/bin) error = %v", err)
 	}
-	for _, name := range names {
-		file, err := fsys.OpenFile(context.Background(), "/bin/"+name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-		if err != nil {
-			t.Fatalf("OpenFile(%s) error = %v", name, err)
-		}
-		if _, err := io.WriteString(file, virtualCommandStubPrefix+name+"\n"); err != nil {
-			t.Fatalf("WriteString(%s) error = %v", name, err)
-		}
-		_ = file.Close()
-	}
+
 	return fsys
 }
 
@@ -1553,35 +1544,12 @@ func TestCoreRunRecoversArrayInvalidTokenLikeBash(t *testing.T) {
 	}
 }
 
-// synthCommandRegistry 兜底合成任意未注册名字（模拟 host 侧原生 fallback：
-// Registry 未命中时也能合成命令）。A 缺陷（无 stub 的内置名被重写成
-// $BuiltinCommandDir 路径）只有在该类兜底下才会触发。
-type synthCommandRegistry struct {
-	*commands.Registry
-	ran []string
-}
-
-func (r *synthCommandRegistry) Lookup(name string) (commands.Command, bool) {
-	if cmd, ok := r.Registry.Lookup(name); ok {
-		return cmd, true
-	}
-	return commands.DefineCommand(name, func(ctx context.Context, inv *commands.Invocation) error {
-		r.ran = append(r.ran, name)
-		if inv.Stdout != nil {
-			_, _ = io.WriteString(inv.Stdout, "synthetic:"+name+"|"+strings.Join(inv.Args, " ")+"\n")
-		}
-		return nil
-	}), true
-}
-
-// A 缺陷回归：无 stub 标记文件的内置名（exit 等）不重写为 stub 路径，保持
-// 解释器派发。修复前 exit 会被重写成 /bin/exit 并报 "No such file or
-// directory"（127），即使 Registry 兜底能合成它。
-func TestCoreRunBuiltinWithoutStubStaysInterpreted(t *testing.T) {
+// Stateful builtin dispatch never consults the registry or filesystem.
+func TestCoreRunStatefulBuiltinStaysInterpreted(t *testing.T) {
 	t.Parallel()
 
-	registry := &synthCommandRegistry{Registry: newShellTestRegistry(t)}
-	fsys := newShellTestFS(t, "echo", "printf") // 故意不写 exit 垫片
+	registry := newShellTestRegistry(t)
+	fsys := newShellTestFS(t, "echo", "printf")
 	var stdout, stderr strings.Builder
 
 	_, err := Run(context.Background(), &Execution{
@@ -1600,12 +1568,11 @@ func TestCoreRunBuiltinWithoutStubStaysInterpreted(t *testing.T) {
 	}
 }
 
-// B 缺陷回归：显式程序路径的二进制文件（首行含 NUL）走 NativeFallback
-// （registry 路径命令），不再被当脚本交默认解释器（修复前报 126/权限失败）。
-func TestCoreRunExplicitBinaryPathUsesRegistry(t *testing.T) {
+// Explicit binary files use only the injected NativeExec callback.
+func TestCoreRunExplicitBinaryPathUsesNativeExec(t *testing.T) {
 	t.Parallel()
 
-	registry := &synthCommandRegistry{Registry: newShellTestRegistry(t)}
+	registry := newShellTestRegistry(t)
 	fsys := newShellTestFS(t)
 	mkdirAllShellTestFS(t, fsys, "/opt")
 	writeShellTestFile(t, fsys, "/opt/tool", "\x7fELF\x00\x01binary\n", 0o755)
@@ -1614,9 +1581,13 @@ func TestCoreRunExplicitBinaryPathUsesRegistry(t *testing.T) {
 	_, err := Run(context.Background(), &Execution{
 		Script:   "/opt/tool a1 b2\n",
 		Registry: registry,
-		FS:       fsys,
-		Stdout:   &stdout,
-		Stderr:   &stderr,
+		NativeExec: func(ctx context.Context, p string, inv *commands.Invocation) error {
+			_, err := io.WriteString(inv.Stdout, "synthetic:"+p+"|"+strings.Join(inv.Args, " ")+"\n")
+			return err
+		},
+		FS:     fsys,
+		Stdout: &stdout,
+		Stderr: &stderr,
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v (stderr=%q)", err, stderr.String())
@@ -1627,7 +1598,7 @@ func TestCoreRunExplicitBinaryPathUsesRegistry(t *testing.T) {
 }
 
 // B 无原生能力端（registry 无对应路径命令）：二进制显式路径报 126
-// "cannot execute binary file"，而非当脚本解释。
+// "native execution unavailable"，而非当脚本解释。
 func TestCoreRunExplicitBinaryPathWithoutNative(t *testing.T) {
 	t.Parallel()
 
@@ -1647,7 +1618,7 @@ func TestCoreRunExplicitBinaryPathWithoutNative(t *testing.T) {
 	if !errors.As(err, &status) || status != 126 {
 		t.Fatalf("Run() error = %v, want exit status 126 (stderr=%q)", err, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "cannot execute binary file") {
+	if !strings.Contains(stderr.String(), "native execution unavailable") {
 		t.Fatalf("stderr = %q, want cannot-execute diagnostic", stderr.String())
 	}
 }

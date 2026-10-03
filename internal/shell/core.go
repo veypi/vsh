@@ -34,27 +34,28 @@ import (
 )
 
 type Execution struct {
-	Name               string
-	Interpreter        string
-	ShellVariant       shellvariant.ShellVariant
-	PassthroughArgs    []string
-	ScriptPath         string
-	Script             string
-	Command            []string
-	CommandPath        string
-	CommandName        string
+	Name            string
+	Interpreter     string
+	ShellVariant    shellvariant.ShellVariant
+	PassthroughArgs []string
+	ScriptPath      string
+	Script          string
+	Command         []string
+	// Argv0 overrides presentation only; Command[0] remains the lookup target.
+	Argv0              *string
 	Args               []string
 	StartupOptions     []string
 	StartupHome        string
 	Interactive        bool
 	Env                map[string]string
+	SearchEnv          map[string]string
 	Dir                string
 	VisiblePWD         string
 	HasVisiblePWD      bool
 	HostPlatform       host.Platform
 	HostProcessMeta    host.ExecutionMeta
 	NewPipe            func() (io.ReadCloser, io.WriteCloser, error)
-	BuiltinCommandDir  string
+	NativeExec         func(context.Context, string, *commands.Invocation) error
 	CompletionState    *shellstate.CompletionState
 	Stdin              io.Reader
 	Stdout             io.Writer
@@ -75,8 +76,9 @@ type Execution struct {
 }
 
 type RunResult struct {
-	FinalEnv    map[string]string
-	ShellExited bool
+	CommandNotFound bool
+	FinalEnv        map[string]string
+	ShellExited     bool
 }
 
 type InteractiveResult struct {
@@ -91,9 +93,6 @@ type resolvedCommand struct {
 	args     []string
 	hashPath string
 }
-
-const virtualCommandStubPrefix = "# vsh virtual command stub: "
-const maxVirtualCommandStubBytes = 256
 
 type core struct{}
 
@@ -239,18 +238,23 @@ func (m *core) RunCommand(ctx context.Context, exec *Execution) (*RunResult, err
 		return &RunResult{FinalEnv: finalEnv}, nil
 	}
 
+	searchEnv := executionEnviron(exec, finalEnv)
+	if exec.SearchEnv != nil {
+		searchEnv = executionEnviron(exec, exec.SearchEnv)
+	}
+	missing := false
 	finalEnv, err := m.executeCommand(ctx, exec, &commandExecuteRequest{
-		Argv:        exec.Command,
-		CommandPath: exec.CommandPath,
-		CommandName: exec.CommandName,
-		VirtualWD:   gbfs.Clean(exec.Dir),
-		Env:         executionEnviron(exec, finalEnv),
-		CurrentEnv:  finalEnv,
-		Stdin:       exec.Stdin,
-		Stdout:      exec.Stdout,
-		Stderr:      exec.Stderr,
+		Argv:       exec.Command,
+		Argv0:      exec.Argv0,
+		Missing:    &missing,
+		VirtualWD:  gbfs.Clean(exec.Dir),
+		Env:        searchEnv,
+		CurrentEnv: finalEnv,
+		Stdin:      exec.Stdin,
+		Stdout:     exec.Stdout,
+		Stderr:     exec.Stderr,
 	})
-	return &RunResult{FinalEnv: finalEnv}, err
+	return &RunResult{FinalEnv: finalEnv, CommandNotFound: missing}, err
 }
 
 func (m *core) runnerConfig(exec *Execution, budget *executionBudget) *interp.RunnerConfig {
@@ -262,8 +266,15 @@ func (m *core) runnerConfig(exec *Execution, budget *executionBudget) *interp.Ru
 			ScriptPath:  analysisRunScriptPath(exec),
 			Interactive: exec != nil && exec.Interactive,
 		},
-		CallHandler:      m.callHandler(exec, budget),
-		ExecHandler:      m.execHandler(exec, budget),
+		CallHandler:   m.callHandler(exec, budget),
+		ExecHandler:   m.execHandler(exec, budget),
+		LookupCommand: commandLookup(exec),
+		GetRegisteredCommands: func() []string {
+			if exec.Registry == nil {
+				return nil
+			}
+			return exec.Registry.Names()
+		},
 		OpenHandler:      m.openHandler(exec),
 		ReadDirHandler:   m.readDirHandler(exec),
 		StatHandler:      m.statHandler(exec),
@@ -293,6 +304,7 @@ func (m *core) runnerConfig(exec *Execution, budget *executionBudget) *interp.Ru
 	cfg.ShellVariant = profile.Variant
 	cfg.LegacyBashCompat = profile.LegacyBashCompat
 	cfg.Arg0 = executionArg0(exec)
+	cfg.Arg0Set = exec.Argv0 != nil
 	cfg.CommandString = executionUsesCommandString(exec)
 	if exec.ScriptPath == "" && exec.Script != "" {
 		cfg.CommandStringValue = exec.Script
@@ -408,6 +420,9 @@ func executionSourceName(exec *Execution) string {
 }
 
 func executionArg0(exec *Execution) string {
+	if exec != nil && exec.Argv0 != nil {
+		return *exec.Argv0
+	}
 	if exec == nil {
 		return "/bin/sh"
 	}
@@ -594,13 +609,6 @@ func (m *core) statHandler(exec *Execution) interp.StatHandlerFunc {
 			if err != nil {
 				return nil, err
 			}
-			hidden, hideErr := isUnsupportedVirtualBuiltinStub(ctx, exec, abs, info.Mode())
-			if hideErr != nil {
-				return nil, hideErr
-			}
-			if hidden {
-				return nil, stdfs.ErrNotExist
-			}
 			return info, nil
 		}
 		return exec.FS.Lstat(ctx, abs)
@@ -646,15 +654,6 @@ func (m *core) callHandler(exec *Execution, budget *executionBudget) interp.Call
 			recordCommand(exec.Trace, trace.EventCallExpanded, commandInfo)
 		}
 
-		if hc.IsBuiltin(args[0]) && shouldRewriteBuiltin(args[0]) {
-			if _, ok := lookupRegistryCommand(exec, args[0]); ok && builtinCommandStubExists(ctx, exec, args[0]) {
-				rewritten := make([]string, len(args))
-				copy(rewritten[1:], args[1:])
-				rewritten[0] = path.Join(builtinCommandDir(exec), args[0])
-				return rewritten, nil
-			}
-		}
-
 		if hc.IsBuiltin(args[0]) {
 			if err := allowBuiltin(ctx, exec.Policy, args[0], args); err != nil {
 				recordPolicyDenied(exec.Trace, err, "", "", args[0], "builtin")
@@ -670,33 +669,6 @@ func (m *core) callHandler(exec *Execution, budget *executionBudget) interp.Call
 
 		return args, nil
 	}
-}
-
-func shouldRewriteBuiltin(name string) bool {
-	switch name {
-	case "true", "false", "pwd", "cd", "dirs", "pushd", "popd", "type", "command", "source", ".",
-		"printf", "test", "[", "complete", "compgen", "compopt":
-		return false
-	default:
-		return true
-	}
-}
-
-// builtinCommandStubExists 报告内置名重写目标 $BuiltinCommandDir/<name> 的 stub
-// 标记文件是否存在。stub 是「该内置名由引擎注册命令提供」的标记（布局初始化
-// 写入）；没有 stub 的内置名（exit/eval/set 等）不重写为路径，留给解释器正常
-// 派发——否则会经由 Registry 的兜底查找被合成成外部程序（host 上表现为
-// "<stubDir>/<名>: No such file or directory"、退出码 127）。
-func builtinCommandStubExists(ctx context.Context, exec *Execution, name string) bool {
-	if exec == nil || exec.FS == nil {
-		return false
-	}
-	dir := builtinCommandDir(exec)
-	if dir == "" {
-		return false
-	}
-	_, err := exec.FS.Stat(ctx, path.Join(dir, name))
-	return err == nil
 }
 
 type builtinInvocation struct {
@@ -768,13 +740,6 @@ func commandBuiltinTarget(args []string) []string {
 	return nil
 }
 
-func builtinCommandDir(exec *Execution) string {
-	if exec == nil || strings.TrimSpace(exec.BuiltinCommandDir) == "" {
-		return "/bin"
-	}
-	return gbfs.Clean(exec.BuiltinCommandDir)
-}
-
 func (m *core) execHandler(exec *Execution, budget *executionBudget) interp.ExecHandlerFunc {
 	return func(ctx context.Context, args []string) error {
 		if len(args) == 0 {
@@ -839,6 +804,7 @@ func invokeResolvedCommand(
 	exec *Execution,
 	resolved *resolvedCommand,
 	argv []string,
+	argv0 *string,
 	currentEnv map[string]string,
 	virtualWD string,
 	stdin io.Reader,
@@ -850,20 +816,22 @@ func invokeResolvedCommand(
 		invocationArgs = append(invocationArgs, argv[1:]...)
 	}
 	invocation := commands.NewInvocation(&commands.InvocationOptions{
-		Args:       invocationArgs,
-		Env:        currentEnv,
-		Cwd:        virtualWD,
-		Stdin:      stdin,
-		Stdout:     stdout,
-		Stderr:     stderr,
-		Now:        exec.Now,
-		SetTime:    exec.SetTime,
-		FileSystem: exec.FS,
-		Network:    exec.Network,
-		Policy:     exec.Policy,
-		Trace:      exec.Trace,
-		Exec:       subexecInvoker(exec.Exec, currentEnv, virtualWD),
-		Interact:   interactiveInvoker(exec.Interact, currentEnv, virtualWD),
+		Args:          invocationArgs,
+		Argv0:         argv0,
+		Env:           currentEnv,
+		Cwd:           virtualWD,
+		Stdin:         stdin,
+		Stdout:        stdout,
+		Stderr:        stderr,
+		Now:           exec.Now,
+		SetTime:       exec.SetTime,
+		FileSystem:    exec.FS,
+		Network:       exec.Network,
+		Policy:        exec.Policy,
+		Trace:         exec.Trace,
+		Exec:          subexecInvoker(exec.Exec, currentEnv, virtualWD),
+		Interact:      interactiveInvoker(exec.Interact, currentEnv, virtualWD),
+		LookupCommand: commandLookup(exec),
 		GetRegisteredCommands: func() []string {
 			if exec.Registry == nil {
 				return nil
@@ -915,8 +883,8 @@ func normalizeSubexecRequest(req *commands.ExecutionRequest, currentEnv map[stri
 		ScriptPath:      req.ScriptPath,
 		Script:          req.Script,
 		Command:         append([]string(nil), req.Command...),
-		CommandPath:     req.CommandPath,
-		CommandName:     req.CommandName,
+		SearchEnv:       req.SearchEnv,
+		Argv0:           req.Argv0,
 		Args:            append([]string(nil), req.Args...),
 		StartupOptions:  append([]string(nil), req.StartupOptions...),
 		Env:             mergeEnv(currentEnv, req.Env),
@@ -1123,6 +1091,7 @@ func lookupRegistryCommand(exec *Execution, name string) (commands.Command, bool
 }
 
 func lookupCommand(ctx context.Context, exec *Execution, dir string, env expand.Environ, name string) (_ *resolvedCommand, ok bool, err error) {
+	name = commandutil.CommandPath(name, exec.HostPlatform)
 	if isInternalHelperCommand(name) {
 		cmd, ok := lookupRegistryCommand(exec, name)
 		if !ok {
@@ -1136,18 +1105,22 @@ func lookupCommand(ctx context.Context, exec *Execution, dir string, env expand.
 		}, true, nil
 	}
 	if strings.Contains(name, "/") {
+		locations, lookupErr := commandLookup(exec)(ctx, commands.CommandLookupRequest{Name: name, Env: envMap(env), WorkDir: dir, FilesOnly: true})
+		if lookupErr == nil && len(locations) > 0 {
+			return lookupCommandPath(ctx, exec, dir, locations[0].Path, "path", name)
+		}
 		return lookupCommandPath(ctx, exec, dir, name, "path", name)
 	}
 
 	// vsh fork (D14): registry-priority — a bare name present in the command
 	// registry short-circuits before the command hash and PATH search, so a
-	// same-named real file (stub directory or any writable PATH dir) can never
+	// same-named real file in a writable PATH directory can never
 	// shadow builtins or platform commands.
 	if cmd, ok := lookupRegistryCommand(exec, name); ok {
 		return &resolvedCommand{
 			command: cmd,
 			name:    name,
-			path:    path.Join(builtinCommandDir(exec), name),
+			path:    "",
 			source:  "registry",
 		}, true, nil
 	}
@@ -1158,15 +1131,16 @@ func lookupCommand(ctx context.Context, exec *Execution, dir string, env expand.
 		}
 	}
 
-	for _, candidate := range pathCandidates(exec, env, name) {
-		resolved, ok, err := lookupCommandPath(ctx, exec, dir, candidate.display, "path-search", name)
-		if err != nil {
-			return nil, false, err
-		}
+	locations, err := commandLookup(exec)(ctx, commands.CommandLookupRequest{Name: name, Env: envMap(env), WorkDir: dir, FilesOnly: true})
+	if err != nil {
+		return nil, false, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: %v", name, err)
+	}
+	if len(locations) > 0 {
+		resolved, ok, err := lookupCommandPath(ctx, exec, dir, locations[0].Path, "path-search", name)
 		if ok {
-			resolved.hashPath = candidate.display
-			return resolved, true, nil
+			resolved.hashPath = locations[0].Path
 		}
+		return resolved, ok, err
 	}
 
 	return nil, false, nil
@@ -1201,18 +1175,7 @@ func lookupCachedCommand(ctx context.Context, exec *Execution, dir, name, cached
 
 func lookupCommandPath(ctx context.Context, exec *Execution, dir, name, source, commandName string) (_ *resolvedCommand, ok bool, err error) {
 	fullPath := gbfs.Resolve(dir, name)
-	resolvedName := path.Base(fullPath)
 	if exec == nil || exec.FS == nil {
-		if dir := builtinCommandDir(exec); dir != "" && path.Dir(fullPath) == dir {
-			if cmd, ok := lookupRegistryCommand(exec, resolvedName); ok {
-				return &resolvedCommand{
-					command: cmd,
-					name:    resolvedName,
-					path:    fullPath,
-					source:  source,
-				}, true, nil
-			}
-		}
 		return nil, false, nil
 	}
 	// For explicit-path invocations (source == "path"), errors are surfaced as
@@ -1239,36 +1202,7 @@ func lookupCommandPath(ctx context.Context, exec *Execution, dir, name, source, 
 		return nil, false, nil //nolint:nilerr // stat error means the file doesn't exist as a command
 	}
 	if info.IsDir() {
-		return nil, false, nil
-	}
-	if hidden, hideErr := isUnsupportedVirtualBuiltinStub(ctx, exec, fullPath, info.Mode()); hideErr != nil {
-		return nil, false, hideErr
-	} else if hidden {
-		if explicitPath {
-			return nil, false, classifyExplicitPathError(ctx, exec, fullPath, stdfs.ErrNotExist)
-		}
-		return nil, false, nil
-	}
-	if dir := builtinCommandDir(exec); dir != "" && path.Dir(fullPath) == dir {
-		if cmd, ok := lookupRegistryCommand(exec, resolvedName); ok {
-			return &resolvedCommand{
-				command: cmd,
-				name:    resolvedName,
-				path:    fullPath,
-				source:  source,
-			}, true, nil
-		}
-		// 孤儿垫片（Registry 无此命令）按未找到处理：垫片只是内置名解析的
-		// 标记文件，直接执行只会空转静默成功（2026-09-28 实测：重启清授权后
-		// 残留 git 垫片把 git add/commit/log 全部吞成 rc=0 无输出）。
-		if stubName, ok, stubErr := virtualCommandStubMarker(ctx, exec, fullPath, info.Mode()); stubErr != nil {
-			return nil, false, stubErr
-		} else if ok && stubName == resolvedName {
-			if explicitPath {
-				return nil, false, classifyExplicitPathError(ctx, exec, fullPath, stdfs.ErrNotExist)
-			}
-			return nil, false, nil
-		}
+		return nil, false, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: Is a directory", fullPath)
 	}
 
 	resolved, ok, err := resolveCommandFile(ctx, exec, fullPath, info.Mode(), commandName)
@@ -1327,77 +1261,35 @@ func hasLongPathComponent(p string) bool {
 	return false
 }
 
-type pathCandidate struct {
-	display string
-}
-
-func pathCandidates(exec *Execution, env expand.Environ, name string) []pathCandidate {
-	pathValue := strings.TrimSpace(env.Get("PATH").String())
-	if pathValue == "" {
-		return nil
-	}
-	exts := commandPathExtensions(exec, env)
-
-	candidates := make([]pathCandidate, 0, (strings.Count(pathValue, ":")+1)*max(1, len(exts)+1))
-	for entry := range strings.SplitSeq(pathValue, ":") {
-		entry = strings.TrimSpace(entry)
-		base := "./" + name
-		switch entry {
-		case "", ".":
-		default:
-			base = path.Join(entry, name)
+func commandLookup(exec *Execution) commands.LookupCommandFunc {
+	return func(ctx context.Context, req commands.CommandLookupRequest) ([]commands.CommandLocation, error) {
+		var found []commands.CommandLocation
+		req.Name = commandutil.CommandPath(req.Name, exec.HostPlatform)
+		if !req.FilesOnly && !strings.Contains(req.Name, "/") {
+			if _, ok := lookupRegistryCommand(exec, req.Name); ok {
+				found = append(found, commands.CommandLocation{Name: req.Name})
+				if !req.All {
+					return found, nil
+				}
+			}
 		}
-		for _, candidate := range commandPathVariants(base, exts) {
-			candidates = append(candidates, pathCandidate{display: candidate})
+		paths, err := commandutil.CommandPaths(ctx, req.Name, req.WorkDir, req.Env, exec.HostPlatform, req.All, true, func(ctx context.Context, p string) (stdfs.FileInfo, error) {
+			if err := allowPath(ctx, exec.Policy, exec.FS, policy.FileActionStat, p); err != nil {
+				return nil, err
+			}
+			return exec.FS.Stat(ctx, p)
+		})
+		if err != nil && len(found) == 0 {
+			return nil, err
 		}
+		for _, p := range paths {
+			found = append(found, commands.CommandLocation{Name: path.Base(p), Path: p})
+		}
+		return found, nil
 	}
-	return candidates
 }
 
-func commandPathExtensions(exec *Execution, env expand.Environ) []string {
-	if exec == nil || len(exec.HostPlatform.PathExtensions) == 0 {
-		return nil
-	}
-	if env == nil {
-		return append([]string(nil), exec.HostPlatform.PathExtensions...)
-	}
-	pathext := strings.TrimSpace(env.Get("PATHEXT").String())
-	if pathext == "" {
-		return append([]string(nil), exec.HostPlatform.PathExtensions...)
-	}
-	exts := make([]string, 0, strings.Count(pathext, ";")+1)
-	for ext := range strings.SplitSeq(strings.ToLower(pathext), ";") {
-		ext = strings.TrimSpace(ext)
-		if ext == "" {
-			continue
-		}
-		if ext[0] != '.' {
-			ext = "." + ext
-		}
-		exts = append(exts, ext)
-	}
-	return exts
-}
-
-func commandPathVariants(name string, exts []string) []string {
-	if len(exts) == 0 || commandPathHasExt(name) {
-		return []string{name}
-	}
-	variants := make([]string, 0, len(exts)+1)
-	variants = append(variants, name)
-	for _, ext := range exts {
-		variants = append(variants, name+ext)
-	}
-	return variants
-}
-
-func commandPathHasExt(file string) bool {
-	index := strings.LastIndex(file, ".")
-	if index < 0 {
-		return false
-	}
-	return strings.LastIndexAny(file, `:\/`) < index
-}
+type shebangDepthKey struct{}
 
 type shebangResolution struct {
 	resolved    *resolvedCommand
@@ -1411,7 +1303,7 @@ type shebangResolution struct {
 func resolveShebangCommand(ctx context.Context, exec *Execution, fullPath, invokedPath string) (_ shebangResolution, ok bool, err error) {
 	file, err := exec.FS.Open(ctx, fullPath)
 	if err != nil {
-		return shebangResolution{}, false, nil
+		return shebangResolution{}, false, err
 	}
 	defer func() {
 		_ = file.Close()
@@ -1431,50 +1323,69 @@ func resolveShebangCommand(ctx context.Context, exec *Execution, fullPath, invok
 			batsRunner:  true,
 		}, true, nil
 	}
-	cmd, ok := lookupRegistryCommand(exec, shebangInterpreter)
-	if !ok {
-		return shebangResolution{interpreter: interpreterPath}, true, nil
+	fields := strings.Fields(line)
+	var target *resolvedCommand
+	if path.Base(interpreterPath) == "env" {
+		// Let the real env command parse its options and submit the nested argv.
+		cmd, found := lookupRegistryCommand(exec, "env")
+		if !found {
+			return shebangResolution{interpreter: interpreterPath}, true, nil
+		}
+		target = &resolvedCommand{command: cmd, name: "env", args: fields[1:]}
+	} else if shellvariant.FromInterpreter(shebangInterpreter).Resolved() {
+		cmd, found := lookupRegistryCommand(exec, shebangInterpreter)
+		if !found {
+			return shebangResolution{interpreter: interpreterPath}, true, nil
+		}
+		target = &resolvedCommand{command: cmd, name: shebangInterpreter, args: argv}
+	} else {
+		depth, _ := ctx.Value(shebangDepthKey{}).(int)
+		if depth >= 4 {
+			return shebangResolution{}, true, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: interpreter recursion limit", fullPath)
+		}
+		ctx = context.WithValue(ctx, shebangDepthKey{}, depth+1)
+		state := handlerState(ctx, exec)
+		locations, lookupErr := commandLookup(exec)(ctx, commands.CommandLookupRequest{Name: interpreterPath, Env: envMap(state.Env), WorkDir: state.Dir})
+		if lookupErr != nil {
+			return shebangResolution{}, true, shellFailureToWriter(ctx, state.Stderr, 126, "%s: bad interpreter: %v", fullPath, lookupErr)
+		}
+		if len(locations) == 0 {
+			return shebangResolution{interpreter: interpreterPath}, true, nil
+		}
+		var found bool
+		target, found, err = lookupCommand(ctx, exec, state.Dir, state.Env, interpreterPath)
+		if err != nil {
+			return shebangResolution{}, true, err
+		}
+		if !found {
+			return shebangResolution{interpreter: interpreterPath}, true, nil
+		}
+		target.args = append(target.args, argv...)
 	}
 	scriptArg := fullPath
 	if strings.Contains(invokedPath, "/") {
 		scriptArg = invokedPath
 	}
-	return shebangResolution{
-		resolved: &resolvedCommand{
-			command: cmd,
-			name:    shebangInterpreter,
-			args:    append(argv, scriptArg),
-		},
-		interpreter: interpreterPath,
-	}, true, nil
+	target.args = append(target.args, scriptArg)
+	return shebangResolution{resolved: target, interpreter: interpreterPath}, true, nil
 }
 
 func resolveCommandFile(ctx context.Context, exec *Execution, fullPath string, mode stdfs.FileMode, invokedPath string) (_ *resolvedCommand, ok bool, err error) {
 	if !isExecutableCommandFile(exec, mode) {
 		return nil, false, nil
 	}
-	if resolved, ok, err := resolveVirtualCommandStub(ctx, exec, fullPath); ok || err != nil {
-		return resolved, ok, err
-	}
 	shebang, shebangOk, err := resolveShebangCommand(ctx, exec, fullPath, invokedPath)
 	if err != nil {
 		return nil, false, err
 	}
 	if shebang.binary {
-		// 二进制可执行文件按显式程序路径处理：交宿主原生适配器执行（设计口径：
-		// 显式程序路径由原生适配器处理）；无原生能力的端（cloud/page）维持原有
-		// 的 126 文案。文本脚本（含或不含 shebang）仍在进程内解释，不成为绕过
-		// 命令注册表的通道。首行含 NUL 的 "#!" 前缀文件（二进制垃圾）也走此分支。
-		if cmd, ok := lookupRegistryCommand(exec, fullPath); ok {
-			return &resolvedCommand{
-				command: cmd,
-				name:    path.Base(fullPath),
-				path:    fullPath,
-				source:  "native-path",
-			}, true, nil
+		if exec.NativeExec == nil {
+			return nil, false, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: native execution unavailable", fullPath)
 		}
-		return nil, false, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: %s: cannot execute binary file", fullPath, fullPath)
+		cmd := commands.DefineCommand(path.Base(fullPath), func(ctx context.Context, inv *commands.Invocation) error { return exec.NativeExec(ctx, fullPath, inv) })
+		return &resolvedCommand{command: cmd, name: path.Base(fullPath), path: fullPath, source: "native-path"}, true, nil
 	}
+
 	if shebangOk {
 		if shebang.resolved != nil {
 			shebang.resolved.source = "shebang"
@@ -1500,101 +1411,11 @@ func resolveCommandFile(ctx context.Context, exec *Execution, fullPath string, m
 	}, true, nil
 }
 
-func resolveVirtualCommandStub(ctx context.Context, exec *Execution, fullPath string) (_ *resolvedCommand, ok bool, err error) {
-	file, err := exec.FS.Open(ctx, fullPath)
-	if err != nil {
-		return nil, false, nil
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-
-	name, ok, err := readVirtualCommandStub(ctx, file)
-	if err != nil {
-		return nil, false, err
-	}
-	if !ok {
-		return nil, false, nil
-	}
-	if path.Base(fullPath) != name {
-		return nil, false, nil
-	}
-	cmd, ok := lookupRegistryCommand(exec, name)
-	if !ok {
-		return nil, false, nil
-	}
-	return &resolvedCommand{
-		command: cmd,
-		name:    name,
-	}, true, nil
-}
-
-func isUnsupportedVirtualBuiltinStub(ctx context.Context, exec *Execution, fullPath string, mode stdfs.FileMode) (bool, error) {
-	name := path.Base(fullPath)
-	if !interp.IsBuiltin(name) || shellvariantprofile.Resolve(executionShellVariant(exec)).SupportsBuiltin(name) {
-		return false, nil
-	}
-	stubName, ok, err := virtualCommandStubMarker(ctx, exec, fullPath, mode)
-	if err != nil || !ok {
-		return false, err
-	}
-	return stubName == name, nil
-}
-
-// virtualCommandStubMarker 读出垫片标记的命令名（非垫片/读失败 → ok=false）。
-// 垫片判定集中于此：isUnsupportedVirtualBuiltinStub（不支持的虚拟内置名
-// 隐藏）与 lookupCommandPath 的孤儿垫片拦截共用。
-func virtualCommandStubMarker(ctx context.Context, exec *Execution, fullPath string, mode stdfs.FileMode) (string, bool, error) {
-	if exec == nil || exec.FS == nil {
-		return "", false, nil
-	}
-	if !mode.IsRegular() {
-		return "", false, nil
-	}
-	file, err := exec.FS.Open(ctx, fullPath)
-	if err != nil {
-		return "", false, nil
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-	return readVirtualCommandStub(ctx, file)
-}
-
-func readVirtualCommandStub(ctx context.Context, r io.Reader) (string, bool, error) {
-	reader := commandutil.ReaderWithContext(ctx, r)
-	var buf bytes.Buffer
-	n, err := io.Copy(&buf, io.LimitReader(reader, maxVirtualCommandStubBytes+1))
-	if err != nil {
-		return "", false, err
-	}
-	if n > maxVirtualCommandStubBytes {
-		return "", false, nil
-	}
-	name, ok := parseVirtualCommandStub(strings.TrimSpace(buf.String()))
-	if !ok {
-		return "", false, nil
-	}
-	return name, true, nil
-}
-
 func isExecutableCommandFile(exec *Execution, mode stdfs.FileMode) bool {
 	if exec != nil && !exec.HostPlatform.RequiresExecutableBit() {
 		return true
 	}
 	return mode&0o111 != 0
-}
-
-func parseVirtualCommandStub(line string) (string, bool) {
-	name, ok := strings.CutPrefix(line, virtualCommandStubPrefix)
-	if !ok {
-		return "", false
-	}
-	name = strings.TrimSpace(name)
-	if name == "" || strings.ContainsAny(name, "/ \t\r\n") {
-		return "", false
-	}
-	return name, true
 }
 
 func readShebangLine(r io.Reader) (line string, ok bool, binary bool, err error) {

@@ -150,8 +150,13 @@ func (c *Env) runParsed(ctx context.Context, inv *Invocation, matches *ParsedCom
 		}
 	}
 
+	var override *string
+	if argv0Set {
+		override = &argv0
+	}
 	result, err := executeCommand(ctx, inv, &executeCommandOptions{
 		Argv:       argv,
+		Argv0:      override,
 		Env:        env,
 		SearchEnv:  searchEnv,
 		WorkDir:    workDir,

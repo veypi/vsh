@@ -115,10 +115,6 @@ func mkdirDefaultMode(inv *Invocation) stdfs.FileMode {
 	return 0o777 &^ chmodCurrentUmask(inv)
 }
 
-func mkdirCompatUsesProcessUmask(inv *Invocation) bool {
-	return inv != nil && inv.Env != nil && strings.TrimSpace(inv.Env["VSH_COMPAT_ROOT"]) != ""
-}
-
 func mkdirPath(ctx context.Context, inv *Invocation, raw string, defaultMode stdfs.FileMode, opts mkdirOptions) ([]string, error) {
 	rawAbs, abs := mkdirResolveOperand(inv, raw)
 	if opts.parents {
@@ -128,7 +124,6 @@ func mkdirPath(ctx context.Context, inv *Invocation, raw string, defaultMode std
 }
 
 func mkdirResolveOperand(inv *Invocation, raw string) (string, string) {
-	raw = remapCompatHostPath(inv, raw)
 	if raw == "" {
 		raw = "."
 	}
@@ -176,7 +171,7 @@ func mkdirSinglePath(ctx context.Context, inv *Invocation, abs string, defaultMo
 	if opts.modeSet {
 		mode = opts.mode
 	}
-	if opts.modeSet || !mkdirCompatUsesProcessUmask(inv) {
+	{
 		if err := inv.FS.Chmod(ctx, abs, mode); err != nil {
 			return nil, &ExitError{Code: 1, Err: err}
 		}
@@ -222,18 +217,15 @@ func mkdirParentsPath(ctx context.Context, inv *Invocation, rawAbs, abs string, 
 			return nil, &ExitError{Code: 1, Err: err}
 		}
 
-		applyMode := true
 		mode := defaultMode
 		switch {
 		case next != abs:
 			mode |= 0o300
 		case opts.modeSet:
 			mode = opts.mode
-		case mkdirCompatUsesProcessUmask(inv):
-			applyMode = false
 		}
 		created = append(created, next)
-		if applyMode {
+		{
 			if err := inv.FS.Chmod(ctx, next, mode); err != nil {
 				return nil, &ExitError{Code: 1, Err: err}
 			}
@@ -244,7 +236,6 @@ func mkdirParentsPath(ctx context.Context, inv *Invocation, rawAbs, abs string, 
 }
 
 func mkdirVerbosePath(inv *Invocation, raw, abs string) string {
-	raw = remapCompatHostPath(inv, raw)
 	if raw == "" {
 		raw = "."
 	}

@@ -3,6 +3,7 @@ package builtins
 import (
 	"context"
 	"fmt"
+	pubcmd "github.com/veypi/vsh/commands"
 	"io"
 )
 
@@ -52,7 +53,18 @@ func (c *Which) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedC
 
 	exitCode := 0
 	for _, name := range names {
-		paths, err := resolveAllCommands(ctx, inv, inv.Env, inv.Cwd, name)
+		if inv.LookupCommand == nil {
+			return fmt.Errorf("which: command lookup unavailable")
+		}
+		locations, err := inv.LookupCommand(ctx, pubcmd.CommandLookupRequest{Name: name, Env: inv.Env, WorkDir: inv.Cwd, All: all})
+		var paths []string
+		for _, loc := range locations {
+			if loc.Path != "" {
+				paths = append(paths, loc.Path)
+			} else {
+				paths = append(paths, loc.Name)
+			}
+		}
 		if err != nil {
 			return err
 		}

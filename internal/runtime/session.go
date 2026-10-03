@@ -76,9 +76,6 @@ func (s *Session) exec(ctx context.Context, req *ExecutionRequest) (*ExecutionRe
 		}
 	}
 
-	if err := s.layout.ensure(ctx, s.fs, execEnv, workDir, s.cfg.Registry.Names()); err != nil {
-		return nil, err
-	}
 	fsWorkDir := runtimeFilesystemWorkDir(ctx, s.fs, workDir)
 	if err := s.fs.Chdir(fsWorkDir); err != nil {
 		return nil, err
@@ -96,14 +93,6 @@ func (s *Session) exec(ctx context.Context, req *ExecutionRequest) (*ExecutionRe
 	ctx, execStdin := bindExecutionTTY(ctx, req.Stdin, stdoutWriter)
 	executionID := nextTraceID("exec")
 	recorder, traceBuffer := newExecutionTraceRecorder(ctx, s.id, executionID, s.cfg.Tracing, true)
-	if s.layout != nil {
-		layoutRecorder := layoutMutationRecorder{layout: s.layout}
-		if _, ok := recorder.(trace.NopRecorder); ok {
-			recorder = layoutRecorder
-		} else {
-			recorder = trace.NewFanout(recorder, layoutRecorder)
-		}
-	}
 
 	started := time.Now().UTC()
 	baseLogEvent := LogEvent{
@@ -150,40 +139,40 @@ func (s *Session) exec(ctx context.Context, req *ExecutionRequest) (*ExecutionRe
 		return result, err
 	}
 	execReq := &shell.Execution{
-		Name:              req.Name,
-		Interpreter:       req.Interpreter,
-		ShellVariant:      req.ShellVariant,
-		PassthroughArgs:   cloneStrings(req.PassthroughArgs),
-		ScriptPath:        req.ScriptPath,
-		Script:            script,
-		Command:           cloneStrings(req.Command),
-		CommandPath:       req.CommandPath,
-		CommandName:       req.CommandName,
-		Args:              req.Args,
-		StartupOptions:    req.StartupOptions,
-		StartupHome:       req.StartupHome,
-		Interactive:       req.Interactive,
-		Env:               execEnv,
-		Dir:               workDir,
-		VisiblePWD:        visiblePWD,
-		HasVisiblePWD:     hasVisiblePWD,
-		BuiltinCommandDir: s.cfg.BuiltinCommandDir,
-		HostPlatform:      hostPlatform(s.cfg.Host),
-		HostProcessMeta:   processMeta,
-		NewPipe:           s.cfg.Host.NewPipe,
-		Stdin:             stdinOrEmpty(execStdin),
-		Stdout:            stdoutWriter,
-		Stderr:            stderrWriter,
-		FS:                s.fs,
-		Network:           s.cfg.NetworkClient,
-		Registry:          s.cfg.Registry,
-		Policy:            s.cfg.Policy,
-		Trace:             recorder,
-		AnalysisObserver:  s.cfg.AnalysisObserver,
-		Now:               s.now,
-		SetTime:           s.setTime,
-		Exec:              s.subexecCallback,
-		Interact:          s.interactCallback,
+		Name:             req.Name,
+		Interpreter:      req.Interpreter,
+		ShellVariant:     req.ShellVariant,
+		PassthroughArgs:  cloneStrings(req.PassthroughArgs),
+		ScriptPath:       req.ScriptPath,
+		Script:           script,
+		Command:          cloneStrings(req.Command),
+		SearchEnv:        req.SearchEnv,
+		Argv0:            req.Argv0,
+		Args:             req.Args,
+		StartupOptions:   req.StartupOptions,
+		StartupHome:      req.StartupHome,
+		Interactive:      req.Interactive,
+		Env:              execEnv,
+		Dir:              workDir,
+		VisiblePWD:       visiblePWD,
+		HasVisiblePWD:    hasVisiblePWD,
+		NativeExec:       s.cfg.NativeExec,
+		HostPlatform:     hostPlatform(s.cfg.Host),
+		HostProcessMeta:  processMeta,
+		NewPipe:          s.cfg.Host.NewPipe,
+		Stdin:            stdinOrEmpty(execStdin),
+		Stdout:           stdoutWriter,
+		Stderr:           stderrWriter,
+		FS:               s.fs,
+		Network:          s.cfg.NetworkClient,
+		Registry:         s.cfg.Registry,
+		Policy:           s.cfg.Policy,
+		Trace:            recorder,
+		AnalysisObserver: s.cfg.AnalysisObserver,
+		Now:              s.now,
+		SetTime:          s.setTime,
+		Exec:             s.subexecCallback,
+		Interact:         s.interactCallback,
 	}
 	var (
 		runResult *shell.RunResult
@@ -213,6 +202,7 @@ func (s *Session) exec(ctx context.Context, req *ExecutionRequest) (*ExecutionRe
 		StderrTruncated: stderr.Truncated(),
 	}
 	if runResult != nil {
+		result.CommandNotFound = runResult.CommandNotFound
 		result.FinalEnv = runResult.FinalEnv
 		result.ShellExited = runResult.ShellExited
 	}
@@ -319,9 +309,6 @@ func (s *Session) interact(ctx context.Context, req *InteractiveRequest) (*Inter
 		}
 	}
 
-	if err := initializeSandboxLayout(ctx, s.fs, execEnv, workDir, s.cfg.Registry.Names()); err != nil {
-		return nil, err
-	}
 	fsWorkDir := runtimeFilesystemWorkDir(ctx, s.fs, workDir)
 	if err := s.fs.Chdir(fsWorkDir); err != nil {
 		return nil, err
@@ -333,43 +320,35 @@ func (s *Session) interact(ctx context.Context, req *InteractiveRequest) (*Inter
 
 	executionID := nextTraceID("exec")
 	recorder, _ := newExecutionTraceRecorder(ctx, s.id, executionID, s.cfg.Tracing, false)
-	if s.layout != nil {
-		layoutRecorder := layoutMutationRecorder{layout: s.layout}
-		if _, ok := recorder.(trace.NopRecorder); ok {
-			recorder = layoutRecorder
-		} else {
-			recorder = trace.NewFanout(recorder, layoutRecorder)
-		}
-	}
 	terminalStdin := bufio.NewReader(stdinOrEmpty(req.Stdin))
 	ctx = forceExecutionTTY(ctx, terminalStdin, writerOrDiscard(req.Stdout))
 	result, err := shell.Interact(ctx, &shell.Execution{
-		Name:              req.Name,
-		ShellVariant:      req.ShellVariant,
-		Args:              req.Args,
-		StartupOptions:    req.StartupOptions,
-		Interactive:       true,
-		Env:               execEnv,
-		Dir:               workDir,
-		VisiblePWD:        visiblePWD,
-		HasVisiblePWD:     hasVisiblePWD,
-		BuiltinCommandDir: s.cfg.BuiltinCommandDir,
-		HostPlatform:      hostPlatform(s.cfg.Host),
-		HostProcessMeta:   processMeta,
-		NewPipe:           s.cfg.Host.NewPipe,
-		Stdin:             terminalStdin,
-		Stdout:            writerOrDiscard(req.Stdout),
-		Stderr:            writerOrDiscard(req.Stderr),
-		FS:                s.fs,
-		Network:           s.cfg.NetworkClient,
-		Registry:          s.cfg.Registry,
-		Policy:            s.cfg.Policy,
-		Trace:             recorder,
-		AnalysisObserver:  s.cfg.AnalysisObserver,
-		Now:               s.now,
-		SetTime:           s.setTime,
-		Exec:              s.subexecCallback,
-		Interact:          s.interactCallback,
+		Name:             req.Name,
+		ShellVariant:     req.ShellVariant,
+		Args:             req.Args,
+		StartupOptions:   req.StartupOptions,
+		Interactive:      true,
+		Env:              execEnv,
+		Dir:              workDir,
+		VisiblePWD:       visiblePWD,
+		HasVisiblePWD:    hasVisiblePWD,
+		NativeExec:       s.cfg.NativeExec,
+		HostPlatform:     hostPlatform(s.cfg.Host),
+		HostProcessMeta:  processMeta,
+		NewPipe:          s.cfg.Host.NewPipe,
+		Stdin:            terminalStdin,
+		Stdout:           writerOrDiscard(req.Stdout),
+		Stderr:           writerOrDiscard(req.Stderr),
+		FS:               s.fs,
+		Network:          s.cfg.NetworkClient,
+		Registry:         s.cfg.Registry,
+		Policy:           s.cfg.Policy,
+		Trace:            recorder,
+		AnalysisObserver: s.cfg.AnalysisObserver,
+		Now:              s.now,
+		SetTime:          s.setTime,
+		Exec:             s.subexecCallback,
+		Interact:         s.interactCallback,
 	})
 	if err != nil {
 		return normalizeInteractiveResult(result), err

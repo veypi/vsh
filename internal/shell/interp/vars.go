@@ -951,7 +951,7 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		case i == 0:
 			vr.Kind = expand.String
 			vr.Str = r.Arg0
-			if vr.Str == "" {
+			if !r.Arg0Set && vr.Str == "" {
 				vr.Str = defaultVirtualShell
 			}
 			vr.Set = true

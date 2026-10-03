@@ -157,6 +157,13 @@ func (b *runnerCompletionBackend) ExternalCommandNames(prefix string) ([]string,
 		return nil, nil
 	}
 	var names []string
+	if b.runner.getRegisteredCommands != nil {
+		for _, name := range b.runner.getRegisteredCommands() {
+			if !strings.HasPrefix(name, "__jb_") && strings.HasPrefix(name, prefix) {
+				names = append(names, name)
+			}
+		}
+	}
 	pathValue := b.runner.writeEnv.Get("PATH").String()
 	for _, elem := range strings.Split(pathValue, ":") {
 		dir := elem

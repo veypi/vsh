@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/veypi/vsh/commands"
 	"io"
 	stdfs "io/fs"
 	"maps"
@@ -100,7 +101,8 @@ type Runner struct {
 	// Arg0 is the shell-visible $0 for the lifetime of this shell execution.
 	// Unlike filename, it must not change while sourced files run.
 	// When empty, the first top-level reader name becomes $0.
-	Arg0 string
+	Arg0Set bool
+	Arg0    string
 
 	// Separate maps - note that bash allows a name to be both a var and a
 	// func simultaneously.
@@ -136,7 +138,9 @@ type Runner struct {
 	callHandler CallHandlerFunc
 
 	// execHandler is responsible for executing programs. It must not be nil.
-	execHandler ExecHandlerFunc
+	execHandler           ExecHandlerFunc
+	lookupCommand         commands.LookupCommandFunc
+	getRegisteredCommands func() []string
 
 	// openHandler is a function responsible for opening files. It must not be nil.
 	openHandler OpenHandlerFunc
@@ -570,6 +574,7 @@ type RunnerConfig struct {
 	Stderr       io.Writer
 	inheritedFDs map[int]*shellFD
 	Params       []string
+	Arg0Set      bool
 	Arg0         string
 	Now          func() time.Time
 	// ShellStartTime is the shell-visible wall clock used for printf %T -2.
@@ -583,14 +588,16 @@ type RunnerConfig struct {
 
 	LegacyBashCompat bool
 
-	CallHandler      CallHandlerFunc
-	ExecHandler      ExecHandlerFunc
-	OpenHandler      OpenHandlerFunc
-	ReadDirHandler   ReadDirHandlerFunc
-	StatHandler      StatHandlerFunc
-	RealpathHandler  RealpathHandlerFunc
-	ProcSubstHandler ProcSubstHandlerFunc
-	NewPipe          func() (io.ReadCloser, io.WriteCloser, error)
+	CallHandler           CallHandlerFunc
+	ExecHandler           ExecHandlerFunc
+	LookupCommand         commands.LookupCommandFunc
+	GetRegisteredCommands func() []string
+	OpenHandler           OpenHandlerFunc
+	ReadDirHandler        ReadDirHandlerFunc
+	StatHandler           StatHandlerFunc
+	RealpathHandler       RealpathHandlerFunc
+	ProcSubstHandler      ProcSubstHandlerFunc
+	NewPipe               func() (io.ReadCloser, io.WriteCloser, error)
 }
 
 func newRunnerBase() *Runner {
@@ -705,6 +712,8 @@ func NewRunner(cfg *RunnerConfig) (*Runner, error) {
 	r.shellStartTime = cfg.ShellStartTime
 	r.callHandler = cfg.CallHandler
 	r.execHandler = cfg.ExecHandler
+	r.lookupCommand = cfg.LookupCommand
+	r.getRegisteredCommands = cfg.GetRegisteredCommands
 	r.openHandler = cfg.OpenHandler
 	r.readDirHandler = cfg.ReadDirHandler
 	r.statHandler = cfg.StatHandler
@@ -717,6 +726,7 @@ func NewRunner(cfg *RunnerConfig) (*Runner, error) {
 	r.commandString = cfg.CommandString
 	r.commandStringValue = cfg.CommandStringValue
 	r.Arg0 = cfg.Arg0
+	r.Arg0Set = cfg.Arg0Set
 	if cfg.inheritedFDs != nil {
 		r.fds = cloneFDTable(cfg.inheritedFDs)
 	}
@@ -1204,25 +1214,27 @@ func (r *Runner) Reset() {
 	analysisState := r.analysis
 	// reset the internal state
 	*r = Runner{
-		Env:              r.Env,
-		tempDir:          r.tempDir,
-		platform:         r.platform,
-		callHandler:      r.callHandler,
-		execHandler:      r.execHandler,
-		openHandler:      r.openHandler,
-		readDirHandler:   r.readDirHandler,
-		statHandler:      r.statHandler,
-		realpathHandler:  r.realpathHandler,
-		procSubstHandler: r.procSubstHandler,
-		timeNow:          r.timeNow,
-		uid:              r.uid,
-		euid:             r.euid,
-		gid:              r.gid,
-		egid:             r.egid,
-		pid:              r.pid,
-		bashPID:          r.bashPID,
-		ppid:             r.ppid,
-		startupHome:      r.startupHome,
+		Env:                   r.Env,
+		tempDir:               r.tempDir,
+		platform:              r.platform,
+		callHandler:           r.callHandler,
+		execHandler:           r.execHandler,
+		lookupCommand:         r.lookupCommand,
+		getRegisteredCommands: r.getRegisteredCommands,
+		openHandler:           r.openHandler,
+		readDirHandler:        r.readDirHandler,
+		statHandler:           r.statHandler,
+		realpathHandler:       r.realpathHandler,
+		procSubstHandler:      r.procSubstHandler,
+		timeNow:               r.timeNow,
+		uid:                   r.uid,
+		euid:                  r.euid,
+		gid:                   r.gid,
+		egid:                  r.egid,
+		pid:                   r.pid,
+		bashPID:               r.bashPID,
+		ppid:                  r.ppid,
+		startupHome:           r.startupHome,
 
 		// These can be set by functions like [Dir] or [Params], but
 		// builtins can overwrite them; reset the fields to whatever the
@@ -1230,6 +1242,7 @@ func (r *Runner) Reset() {
 		Dir:                r.origDir,
 		Params:             r.origParams,
 		Arg0:               r.origArg0,
+		Arg0Set:            r.Arg0Set,
 		opts:               r.origOpts,
 		stdin:              r.origStdin,
 		stdout:             r.origStdout,
@@ -1434,7 +1447,7 @@ func (r *Runner) run(ctx context.Context, node syntax.Node, runExitTrap, manageM
 	r.filename = ""
 	switch node := node.(type) {
 	case *syntax.File:
-		if r.Arg0 == "" && strings.TrimSpace(node.Name) != "" {
+		if !r.Arg0Set && r.Arg0 == "" && strings.TrimSpace(node.Name) != "" {
 			r.Arg0 = node.Name
 		}
 		r.filename = node.Name
@@ -1495,8 +1508,11 @@ func (r *Runner) subshell(_ bool) *Runner {
 		pipeFactory:               r.pipeFactory,
 		Params:                    r.Params,
 		Arg0:                      r.Arg0,
+		Arg0Set:                   r.Arg0Set,
 		callHandler:               r.callHandler,
 		execHandler:               r.execHandler,
+		lookupCommand:             r.lookupCommand,
+		getRegisteredCommands:     r.getRegisteredCommands,
 		openHandler:               r.openHandler,
 		readDirHandler:            r.readDirHandler,
 		statHandler:               r.statHandler,

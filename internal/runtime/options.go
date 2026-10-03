@@ -49,8 +49,8 @@ func WithConfig(cfg *Config) Option {
 		if cfg.AnalysisObserver != nil {
 			target.AnalysisObserver = cfg.AnalysisObserver
 		}
-		if cfg.BuiltinCommandDir != "" {
-			target.BuiltinCommandDir = cfg.BuiltinCommandDir
+		if cfg.NativeExec != nil {
+			target.NativeExec = cfg.NativeExec
 		}
 		return nil
 	}

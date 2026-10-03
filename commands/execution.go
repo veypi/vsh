@@ -19,15 +19,12 @@ type ExecutionRequest struct {
 	// Command runs an already-tokenized command argv without shell parsing.
 	// Script and Command are mutually exclusive.
 	Command []string
-	// CommandPath optionally overrides the executable looked up for Command[0]
-	// while preserving Command[0] as the presented argv0.
-	CommandPath string
-	// CommandName optionally overrides the resolved command name used for
-	// policy checks and tracing when CommandPath is set.
-	CommandName    string
+	// Argv0 overrides presentation only; Command[0] remains the lookup target.
+	Argv0          *string
 	Args           []string
 	StartupOptions []string
 	Env            map[string]string
+	SearchEnv      map[string]string
 	WorkDir        string
 	Timeout        time.Duration
 	ReplaceEnv     bool

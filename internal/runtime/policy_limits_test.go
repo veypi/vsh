@@ -154,7 +154,6 @@ func TestMaxCommandCountCountsUserCommandsWithInternalPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession() error = %v", err)
 	}
-	writeSessionFile(t, session, "/bin/"+commandName, []byte("# helper stub\n"))
 
 	result, err := session.Exec(context.Background(), &ExecutionRequest{
 		Script: commandName + "\n" + commandName + "\n",

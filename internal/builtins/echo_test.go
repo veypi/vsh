@@ -12,8 +12,8 @@ func TestEchoSupportsGNUEscapeDecoding(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "echo -n -e '\\x1b\\n\\e\\n\\33\\n\\033\\n\\0033\\n'\n" +
-			"echo -n -e '\\x\\n'\n",
+		Script: "env echo -n -e '\\x1b\\n\\e\\n\\33\\n\\033\\n\\0033\\n'\n" +
+			"env echo -n -e '\\x\\n'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -33,7 +33,7 @@ func TestEchoSupportsUnicodeEscapesInCLocale(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "LC_ALL=C LANG=C echo -n -e '\\u0065|\\U00000065|\\u6|abcd\\u006|\\u03bc|\\U000003bc|\\U0010ffff|\\U00110000|\\udc00|\\U0000dc00'\n",
+		Script: "LC_ALL=C LANG=C env echo -n -e '\\u0065|\\U00000065|\\u6|abcd\\u006|\\u03bc|\\U000003bc|\\U0010ffff|\\U00110000|\\udc00|\\U0000dc00'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -54,7 +54,7 @@ func TestEchoDropsOutOfRangeUnicodeEscapesInCLocale(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "LC_ALL=C LC_CTYPE= LANG= echo -n -e '\\U00110000|\\U7fffffff|\\U80000000|\\UFFFFFFFF|Z'\n",
+		Script: "LC_ALL=C LC_CTYPE= LANG= env echo -n -e '\\U00110000|\\U7fffffff|\\U80000000|\\UFFFFFFFF|Z'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -74,7 +74,7 @@ func TestEchoSupportsUnicodeEscapesInUTF8Locale(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 echo -n -e '\\u0065|\\u03bc|\\U0001F642|\\udc00|\\U0000dc00|\\U00110000'\n",
+		Script: "LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 env echo -n -e '\\u0065|\\u03bc|\\U0001F642|\\udc00|\\U0000dc00|\\U00110000'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -104,7 +104,7 @@ func TestEchoUsesUTF8PathWhenLocaleVarsAreEmpty(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "LC_ALL= LC_CTYPE= LANG= echo -n -e '\\u03bc|\\U00110000|\\U80000000|Z'\n",
+		Script: "LC_ALL= LC_CTYPE= LANG= env echo -n -e '\\u03bc|\\U00110000|\\U80000000|Z'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -131,7 +131,7 @@ func TestEchoSupportsLegacyHighUnicodeEscapesInUTF8Locale(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 echo -n -e '\\U00200000|\\U04000000|\\U7fffffff|\\U80000000|\\UFFFFFFFF|Z'\n",
+		Script: "LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 env echo -n -e '\\U00200000|\\U04000000|\\U7fffffff|\\U80000000|\\UFFFFFFFF|Z'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -161,9 +161,9 @@ func TestEchoTreatsDoubleHyphenAsLiteralAndHonorsBackslashC(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "echo -- 'foo'\n" +
-			"echo -n -e -- 'foo\\n'\n" +
-			"echo -e 'foo\\n\\cbar'\n",
+		Script: "env echo -- 'foo'\n" +
+			"env echo -n -e -- 'foo\\n'\n" +
+			"env echo -e 'foo\\n\\cbar'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -183,14 +183,14 @@ func TestEchoSupportsPOSIXLYCorrectMode(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "POSIXLY_CORRECT=1 echo -n -E 'foo\\n'\n" +
-			"POSIXLY_CORRECT=1 echo -nE 'foo'\n" +
-			"POSIXLY_CORRECT=1 echo -E -n 'foo'\n" +
-			"POSIXLY_CORRECT=1 echo -n '\\u03bc|\\e|\\n'\n" +
-			"POSIXLY_CORRECT=1 echo -n -e '\\u03bc|\\e|\\n'\n" +
-			"POSIXLY_CORRECT=1 echo -n -e -E '\\n'\n" +
-			"POSIXLY_CORRECT=1 echo -n -E -e '\\n'\n" +
-			"POSIXLY_CORRECT=1 echo --version\n",
+		Script: "POSIXLY_CORRECT=1 env echo -n -E 'foo\\n'\n" +
+			"POSIXLY_CORRECT=1 env echo -nE 'foo'\n" +
+			"POSIXLY_CORRECT=1 env echo -E -n 'foo'\n" +
+			"POSIXLY_CORRECT=1 env echo -n '\\u03bc|\\e|\\n'\n" +
+			"POSIXLY_CORRECT=1 env echo -n -e '\\u03bc|\\e|\\n'\n" +
+			"POSIXLY_CORRECT=1 env echo -n -e -E '\\n'\n" +
+			"POSIXLY_CORRECT=1 env echo -n -E -e '\\n'\n" +
+			"POSIXLY_CORRECT=1 env echo --version\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -210,10 +210,10 @@ func TestEchoRecognizesExactHelpVersionAndOptionPrecedence(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "echo --version\n" +
-			"echo --ver\n" +
-			"echo -e -E '\\na'\n" +
-			"echo -E -e '\\na'\n",
+		Script: "env echo --version\n" +
+			"env echo --ver\n" +
+			"env echo -e -E '\\na'\n" +
+			"env echo -E -e '\\na'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -235,7 +235,7 @@ func TestEchoSupportsGNUOctalWrapping(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "echo -ne '\\0501\\0777\\08\\1'\n",
+		Script: "env echo -ne '\\0501\\0777\\08\\1'\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -255,7 +255,7 @@ func TestEchoHelpIsAvailableAsSoleLongOption(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "echo --help\n",
+		Script: "env echo --help\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)

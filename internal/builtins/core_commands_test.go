@@ -178,7 +178,7 @@ func TestTrueAndFalseCommandsByPath(t *testing.T) {
 	rt := newRuntime(t, &Config{})
 
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Script: "if /bin/true; then echo yes; fi\nif /bin/false; then echo bad; else echo no; fi\n",
+		Script: "if env true; then echo yes; fi\nif env false; then echo bad; else echo no; fi\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -204,7 +204,7 @@ func TestWhichFindsRegisteredCommandsOnPath(t *testing.T) {
 	if result.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0; stderr=%q", result.ExitCode, result.Stderr)
 	}
-	if got, want := result.Stdout, "/usr/bin/echo\n/usr/bin/true\nmiss\n"; got != want {
+	if got, want := result.Stdout, "echo\ntrue\nmiss\n"; got != want {
 		t.Fatalf("Stdout = %q, want %q", got, want)
 	}
 }
@@ -222,7 +222,7 @@ func TestWhichSupportsAllSilentAndHelp(t *testing.T) {
 	if result.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0; stderr=%q", result.ExitCode, result.Stderr)
 	}
-	if !strings.Contains(result.Stdout, "/bin/true") || !strings.Contains(result.Stdout, "/usr/bin/true") {
+	if !strings.HasPrefix(result.Stdout, "true\n") {
 		t.Fatalf("Stdout = %q, want all PATH matches", result.Stdout)
 	}
 	if !strings.Contains(result.Stdout, "silent-miss\n") {
@@ -242,7 +242,7 @@ func TestCommandBuiltinV(t *testing.T) {
 shopt -s expand_aliases
 alias ll='echo alias'
 fn() { :; }
-command -v ll fn for pwd /bin/true missing
+command -v ll fn for pwd true missing
 printf 'first=%d\n' "$?"
 command -v echo fn ZZZ for
 printf 'second=%d\n' "$?"
@@ -267,7 +267,7 @@ printf 'plain=%d\n' "$?"
 		"fn\n" +
 		"for\n" +
 		"pwd\n" +
-		"/bin/true\n" +
+		"true\n" +
 		"first=1\n" +
 		"echo\n" +
 		"fn\n" +
@@ -435,21 +435,21 @@ echo ---
 		t.Fatalf("ExitCode = %d, want 0; stderr=%q", result.ExitCode, result.Stderr)
 	}
 	const want = "" +
-		"/bin/[\n" +
-		"/bin/echo\n" +
-		"/bin/false\n" +
-		"/bin/printf\n" +
-		"/bin/pwd\n" +
-		"/bin/test\n" +
-		"/bin/true\n" +
+		"[\n" +
+		"echo\n" +
+		"false\n" +
+		"printf\n" +
+		"pwd\n" +
+		"test\n" +
+		"true\n" +
 		"---\n" +
-		"/bin/[\n" +
-		"/bin/echo\n" +
-		"/bin/false\n" +
-		"/bin/printf\n" +
-		"/bin/pwd\n" +
-		"/bin/test\n" +
-		"/bin/true\n"
+		"[\n" +
+		"echo\n" +
+		"false\n" +
+		"printf\n" +
+		"pwd\n" +
+		"test\n" +
+		"true\n"
 	if got := result.Stdout; got != want {
 		t.Fatalf("Stdout = %q, want %q", got, want)
 	}
@@ -486,8 +486,8 @@ type printf
 		t.Fatalf("ExitCode = %d, want 0; stderr=%q", result.ExitCode, result.Stderr)
 	}
 	for _, want := range []string{
-		"/bin/printf\n",
-		"printf is /bin/printf\n",
+		"printf\n",
+		"printf is a registered command\n",
 		"builtin=1\n",
 		"*printf [-v var] format [arguments]",
 		"printf: printf [-v var] format [arguments]\n",

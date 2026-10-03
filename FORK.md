@@ -39,78 +39,25 @@ git fetch upstream
 git cherry-pick <sha>   # 冲突点预期集中在改名面，逐文件处理
 ```
 
-## 分叉点（与上游语义不同之处）
+## 当前架构差异（2026-10-03）
 
-1. **D14 registry 优先**（M1 落地）：`internal/shell/core.go` 的 `lookupCommand` 中，
-   名字在 Registry 即整体短路（source = `"registry"`），提到 hash 缓存与 PATH 候选循环
-   之前——同名真实文件不再 shadow 内建/平台命令。连带语义变化（测试已同步）：
-   - registry 命令不再经过 PATH 解析 → 不写入 hash 表、hits 不增长；
-   - PATH 只约束 registry 之外的裸名（真实文件）；空 PATH 不再禁用内建；
-   - host 适配器 `RequireExecutableBit` 不再约束 registry 名（仍约束真实文件）；
-   - trace 的 `ResolutionSource` 新增 `"registry"`；解析路径为 `builtinCommandDir` 拼接（`/bin/<name>`）。
-   上游语义测试（`TestLookupCommandPrefersRealExecutableOverRegistryStub` 等 8 处）已按新语义反转/重写。
-2. **D7 --help 全覆盖**（M1.3.2）：130 个内建全部原生应答 `--help`（退出 0 + 非空用法文本）。
-   补登 20 个缺口：interp 层（true/false/test/[/pwd/complete/compopt/compgen）与 builtins 层
-   （truefalse/test/help/umask/kill/compadjust/nl/rev/rmdir/readlink/sed/not_implemented 系列）。
-   Spec 框架命令统一用 `Parse.AutoHelp: true` 接入自动渲染；`internal/runtime/help_coverage_test.go`
-   常驻防回归。
-3. **fork 适配**：`internal/shell/docs_prune_test.go` 在 website/ 缺失（已剪枝）时跳过遍历。
+- 解释器 builtin 与 Registry 分开。外部裸名先查 Registry，再查真实 PATH；显式路径只查文件。不再生成、识别、修复或清理 stub。
+- 新的 NativeExec 回调只接受已经解析的真实二进制路径，默认不提供。vsh 不依赖 vbox，也不直接启动宿主程序。
+- type/which/command/hash/补全与嵌套执行共用解析。Registry 不写文件 hash，不产生虚假 /bin 路径。状态性 complete/compopt/compgen 只留解释器实现。
+- 默认 memory FS factory 准备 home/tmp；自定义 factory 自己准备 cwd。Runtime 和 Session 不根据 HOME/PATH/命令变化维护布局。
+- 移除 VSH_COMPAT_ROOT 和 VSH_COMPAT_PHYSICAL_PWD 的路径投影；测试与集成使用真正的 FS namespace。
+- 原生 --help 应答与已有 shell variant 能力保留；具体边界见 SPEC.md。
 
-## 存量 config.yaml 行序迁移提醒（vbox 语义反转）
+## 集成边界
 
-（3.6.1 核对结果，2026-09-24）**mbp**：`fs_rules` 仅 `rw:/var/run/docker.sock` 单行（无次序问题）；
-`net_rules`/`ssh_rules` 空；`exec_allow` 空（无 shell/解释器，3.6.2 通过）；`fs_policy: deny` /
-`net_policy: open` / `ssh_policy: deny` 不变——**无需改动**。用户确认「config 没啥要改的」。
-win 侧 pending（机器不在线）。
+pod/cloud 的共享集成是 aic-pod/libs/execution：管理执行句柄、等待和 bg，并仅注册本端可用的平台命令。host 在已解析文件出口做 exec_rules 判定后交 vbox；cloud 不注入 NativeExec。service 生命周期属于 skillrun，不占 bg 配额。
 
-迁移判读规则（供 win/后续机器用）：首命中生效 + cfg 组内反转（文件末行最先生效）；
-旧「先宽行后窄行覆盖」写法在新语义下反转，需把窄行挪前；文件尾 permanent grant 追加的
-`rw:` 行现在最先生效，注意是否意外压过前面的 `deny:` 行。
+Windows 的 PATH 在 host 环境入口转换为冒号分隔的 /c/... 形态；程序路径、cwd 和路径环境变量在 OS 出口统一还原。vsh 不解析原生分号 PATH。
 
-pod 侧 fsauth/netauth 从「后命中者胜（last-wins）」反转为「首命中生效（first-wins）」。**开发者机器（mbp / win）上的存量 config.yaml `fs_rules`
-行序在两种语义下含义相反**——切换 vbox 前必须人工过一遍（todo M3.6.1）。
+Session.Exec 仍串行化同一会话的 shell 状态。前台等待结束后可以由 execution 托管同一执行；bg list/wait/kill 管理已有句柄，不另起一条执行。进程级硬资源限制由 vbox/部署环境负责。
 
-## Windows PATH 分隔符（M1.3.1 核实结论）
+## 本仓验证入口
 
-`internal/runtime/layout.go` 的 `commandDirectoriesForPath` 无条件按 `:` 切分 PATH——
-原生 Windows PATH（`C:\...;D:\...`）会被盘符冒号切碎。**结论：fork 内不改切分逻辑**；
-约束落在 glue（aic-pod libs/vsh fs_host）——必须向引擎呈现 unix 风格虚拟路径
-（PATH 钉 `{session_root}/{sid}/bin` 等不含盘符的虚拟路径，todo 2.3.3），引擎永远看不到
-原生 Windows PATH。设备级实证随 M2 glue 的 win 冒烟一并验收（design M1.3.1 的设备实证部分
-移至 M2.3.3 对齐）。
+上游 Makefile、Nix flake 和 oracle 下载脚本已随 fork 剪枝。根模块用 go test ./... 与 go vet ./...；contrib 是独立模块，按 go.work 分别验证。ripgrep/diff oracle 需要分别指定 VSH_CONFORMANCE_RIPGREP、VSH_CONFORMANCE_DIFF，缺少固定版本时应报告未验证，不能把跳过当通过。
 
-## 已知环境性测试失败（非代码问题，2026-09-23 mbp 实录）
-
-- `TestDiffMatchesGNUDiff`：需 GNU diffutils 3.12（上游经 Nix 钉版，脚本已随剪枝删除）；
-  设置 `VSH_CONFORMANCE_DIFF` 指向 GNU diff 后运行。ripgrep oracle 用
-  `VSH_CONFORMANCE_RIPGREP=$(which rg)`（homebrew rg 15.1.0 实测通过）。
-- `TestFieldsGlobIgnoreCharClass`（shell/expand）：测试写 `.env` 文件被 aic-pod 沙箱
-  deny 策略拦截——无沙箱环境下通过。
-- `contrib/jq TestJQSupportsStreamErrorsMode`：上游原检出在 go1.27 下同样失败
-  （gojq 错误消息列号漂移），非 fork 引入。
-- `examples/` 模块构建：依赖 grpc 测试数据含 `.key` 文件，沙箱禁止解压写入——
-  无沙箱环境或预填模块缓存后可构建。根模块 + 10 个 contrib 模块构建全绿。
-
-## Session.Exec 串行化与单命令死循环防线（2026-09-24 实测定案）
-
-`internal/runtime/session.go`：`Session.Exec` 对整个执行持有 `s.mu`——同会话串行。
-**fork 内不改**（并发 shell 共享 env/cwd/fd 语义混乱，上游有意如此）；缺口在 glue
-（aic-pod libs/vsh）两层化解：
-
-1. `bg run` 走派生会话（`sid#bg-*`）——不与前台互等（同会话 bg 会死锁）。
-2. **管理面快路径**：纯 `bg list/wait/kill/output`（或裸 bg）单命令脚本路由派生会话
-   （`sid#mgmt-*`，`isPureBGMgmtScript` 保守判定：单语句/全字面量/无重定向管道）。
-   实测漏洞：前台长任务超时转 bg 后仍持基会话锁，救场的 `bg kill` 排在锁后到不了
-   执行层，会话活锁至 30min 墙钟。`bg run` 刻意排除（cwd 继承依赖基会话 FS 状态）。
-
-单命令死循环（`yes > /dev/null` 类）防线边界：解释器 limits（MaxCommandCount 等）
-只在命令间触发，管不到单个命令内部；兜底 = TaskTable 30min 墙钟（到期 124）+
-bounded output。命令级 CPU 硬上限不可行（Go 无 per-goroutine CPU 计量；墙钟会误杀
-合法 `sleep`）——维持 30min 有界 + 管理面可杀的设计。
-
-**并发容量闸**（同日用户拍板，glue TaskTable）：单任务墙钟只限时长不限并发——
-bg fan-out（一次调用 `for i in $(seq 1 64); do bg run 'yes >/dev/null'; done`）/多会话
-并发可占满全部核。TaskTable.Start 加两级上限：全局 max(2, NumCPU/2)（同进程其他
-负载永远留一半核）+ per-owner 4（cloud owner="u:"+uid，host owner="host"，bg run
-经 ctx 继承同 owner）；超额快速拒绝（排队本身是 DoS 放大器）。进程内 per-task CPU
-配额依旧不可行，硬保证在部署层（aic 服务跑 cgroup CPU limit，运维侧补）。
+已知基线失败：`contrib/jq TestJQSupportsStreamErrorsMode` 在 Go 1.27 下的错误文本及列号断言不一致，上游原检出也会失败。本次架构调整未修改 jq 实现或该断言；2026-10-03 复验仍能重现。这个问题与命令解析分派无关，不计作本次回归通过项。

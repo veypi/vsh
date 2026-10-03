@@ -968,15 +968,6 @@ func runXArgsTask(ctx context.Context, inv *Invocation, opts *xargsOptions, task
 		}
 	}
 
-	if _, ok, err := resolveCommand(ctx, inv, env, inv.Cwd, task.argv[0]); err != nil {
-		return result, &ExitError{Code: exitCodeForError(err), Err: err}
-	} else if !ok {
-		result.exitCode = xargsExitNotFound
-		result.status = xargsExitNotFound
-		result.stderr = fmt.Sprintf("xargs: %s: No such file or directory\n", task.argv[0])
-		return result, nil
-	}
-
 	execResult, err := executeCommand(ctx, inv, &executeCommandOptions{
 		Argv:    task.argv,
 		Env:     env,
@@ -991,6 +982,10 @@ func runXArgsTask(ctx context.Context, inv *Invocation, opts *xargsOptions, task
 		result.stdout = execResult.Stdout
 		result.stderr = execResult.Stderr
 		result.exitCode = execResult.ExitCode
+		if execResult.CommandNotFound {
+			result.status = xargsExitNotFound
+			result.stderr = fmt.Sprintf("xargs: %s: No such file or directory\n", task.argv[0])
+		}
 	}
 	return result, nil
 }

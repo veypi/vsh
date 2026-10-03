@@ -32,7 +32,7 @@ func TestTraceRecordsCommandResolutionSources(t *testing.T) {
 	})
 	writeSessionFile(t, session, "/home/agent/note.txt", []byte("payload\n"))
 
-	result := mustExecSession(t, session, "echo hi\ncat note.txt\n/bin/cat note.txt\n")
+	result := mustExecSession(t, session, "echo hi\ncat note.txt\n")
 
 	echoEvent := findCommandEvent(result.Events)
 	if echoEvent == nil || echoEvent.Command == nil {
@@ -43,23 +43,18 @@ func TestTraceRecordsCommandResolutionSources(t *testing.T) {
 	}
 
 	startEvents := findCommandEvents(result.Events, trace.EventCommandStart, "cat")
-	if len(startEvents) != 2 {
-		t.Fatalf("command.start cat events = %d, want 2", len(startEvents))
+	if len(startEvents) != 1 {
+		t.Fatalf("command.start cat events = %d, want 1", len(startEvents))
 	}
 
 	// vsh fork (D14): bare cat short-circuits through the registry.
 	if got, want := startEvents[0].Command.ResolutionSource, "registry"; got != want {
 		t.Fatalf("bare cat ResolutionSource = %q, want %q", got, want)
 	}
-	if got, want := startEvents[0].Command.ResolvedPath, "/bin/cat"; got != want {
+	if got, want := startEvents[0].Command.ResolvedPath, ""; got != want {
 		t.Fatalf("bare cat ResolvedPath = %q, want %q", got, want)
 	}
-	if got, want := startEvents[1].Command.ResolutionSource, "path"; got != want {
-		t.Fatalf("path cat ResolutionSource = %q, want %q", got, want)
-	}
-	if got, want := startEvents[1].Command.ResolvedPath, "/bin/cat"; got != want {
-		t.Fatalf("path cat ResolvedPath = %q, want %q", got, want)
-	}
+
 }
 
 func TestTraceRecordsCommandAndPathPolicyDenials(t *testing.T) {

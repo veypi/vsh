@@ -85,6 +85,9 @@ func (c *Bash) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 	if err != nil {
 		return exitf(inv, 2, "%v", err)
 	}
+	if inv.Argv0 != nil && (parsed.Source == BashSourceStdin || (parsed.Source == BashSourceCommandString && len(matches.Args("arg")) == 0)) {
+		parsed.ExecutionName = *inv.Argv0
+	}
 	switch parsed.Action {
 	case "help":
 		return RenderBashInvocationUsage(inv.Stdout, BashInvocationConfig{
@@ -173,6 +176,9 @@ func (c *Bash) executeInlineScript(ctx context.Context, inv *Invocation, parsed 
 		return err
 	}
 	req := parsed.BuildExecutionRequest(inv.Env, inv.Cwd, stdin, script)
+	if parsed.Source != BashSourceFile {
+		req.Argv0 = &parsed.ExecutionName
+	}
 	// When stdout and stderr point to the same writer (e.g. 2>&1),
 	// pass them through so the child session writes directly and
 	// output interleaving between trace and command output is preserved.

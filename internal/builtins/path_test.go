@@ -562,7 +562,7 @@ func TestRmdirParentsKeepRelativeSymlinkDiagnosticsWithEmptyPath(t *testing.T) {
 		t.Fatalf("setup ExitCode = %d, want 0; stderr=%q", setup.ExitCode, setup.Stderr)
 	}
 
-	result := mustExecSession(t, session, "PATH=\n/bin/rmdir -p sl/dir2\n")
+	result := mustExecSession(t, session, "PATH=\nenv rmdir -p sl/dir2\n")
 	if result.ExitCode == 0 {
 		t.Fatalf("ExitCode = %d, want non-zero", result.ExitCode)
 	}

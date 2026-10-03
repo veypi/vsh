@@ -170,7 +170,7 @@ For this repository and the validated context, severity depends primarily on whe
 | `internal/shell/core.go` and `internal/shell/command_dispatch.go` | Central command resolution, builtin mediation, nested execution, compile pipeline wiring, and handler setup for the in-tree shell engine. | TM-004, TM-006, TM-007 |
 | `internal/runtime/session.go` | Cwd and env resolution, timeout handling, output capture, and final result shaping all happen here. | TM-004, TM-005 |
 | `internal/runtime/runtime.go` | Defines default registry, policy, network wiring, and budget defaults that shape the baseline sandbox posture. | TM-001, TM-003, TM-004 |
-| `internal/runtime/layout.go` | Creates the default environment, filesystem layout, and virtual `/bin` command stubs seen by untrusted scripts. | TM-001, TM-007 |
+| `internal/runtime/filesystem.go` | Prepares default memory home/tmp; custom factories own their namespace. | TM-001, TM-007 |
 | `policy/pathcheck.go` | Path root enforcement and symlink traversal handling are core to host filesystem containment. | TM-001, TM-002 |
 | `policy/policy.go` | Default allowlists and limits live here; default builtin behavior is especially important for restriction profiles. | TM-002, TM-004, TM-007 |
 | `fs/host_posix.go` | Read-only host mount boundary; canonicalization and virtual-root mapping determine what a script can really read. | TM-001, TM-002 |

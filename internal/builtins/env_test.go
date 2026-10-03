@@ -2,6 +2,7 @@ package builtins_test
 
 import (
 	"context"
+	"github.com/veypi/vsh/policy"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,7 @@ func TestEnvCanExecuteDoubleDashCommandAfterAssignments(t *testing.T) {
 
 	rt := newRuntime(t, &Config{
 		FileSystem: gbruntime.ReadWriteDirectoryFileSystem(root, gbruntime.ReadWriteDirectoryOptions{}),
+		Policy:     policy.NewStatic(&policy.Config{ReadRoots: []string{"/"}, WriteRoots: []string{"/"}, SymlinkMode: policy.SymlinkFollow}),
 	})
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
 		WorkDir: "/",
@@ -628,6 +630,7 @@ func TestEnvFollowsSymlinkCommandsFromEmptyPathEntry(t *testing.T) {
 
 	rt := newRuntime(t, &Config{
 		FileSystem: gbruntime.ReadWriteDirectoryFileSystem(root, gbruntime.ReadWriteDirectoryOptions{}),
+		Policy:     policy.NewStatic(&policy.Config{ReadRoots: []string{"/"}, WriteRoots: []string{"/"}, SymlinkMode: policy.SymlinkFollow}),
 	})
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
 		WorkDir: "/",
@@ -685,6 +688,7 @@ func TestEnvPreservesInvokedSymlinkNameForNestedCommands(t *testing.T) {
 
 	rt := newRuntime(t, &Config{
 		FileSystem: gbruntime.ReadWriteDirectoryFileSystem(root, gbruntime.ReadWriteDirectoryOptions{}),
+		Policy:     policy.NewStatic(&policy.Config{ReadRoots: []string{"/"}, WriteRoots: []string{"/"}, SymlinkMode: policy.SymlinkFollow}),
 	})
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
 		WorkDir: "/",
@@ -706,45 +710,7 @@ func TestEnvPreservesInvokedSymlinkNameForNestedCommands(t *testing.T) {
 	}
 }
 
-func TestEnvMapsHostAbsoluteCompatWrapperPathsFromTopBuilddir(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(src) error = %v", err)
-	}
-	wrapper := "#!/bin/sh\n" +
-		"vsh_bin=$root_dir/build-aux/vsh-harness/vsh\n" +
-		"jbgo_disabled_builtins=$(gnu_disabled_builtins)\n" +
-		"if [ -e /build-aux/vsh-harness/gnu-programs.txt ]; then\n" +
-		"  exec \"/bin/printf\" \"$@\"\n" +
-		"fi\n" +
-		"exec \"$vsh_bin\" --readwrite-root \"$root_dir\" --cwd \"$sandbox_cwd\" -c 'exec \"$@\"' _ printf \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(root, "src", "printf"), []byte(wrapper), 0o755); err != nil {
-		t.Fatalf("WriteFile(printf wrapper) error = %v", err)
-	}
-
-	rt := newRuntime(t, &Config{
-		FileSystem: gbruntime.ReadWriteDirectoryFileSystem(root, gbruntime.ReadWriteDirectoryOptions{}),
-	})
-	result, err := rt.Run(context.Background(), &ExecutionRequest{
-		Env: map[string]string{
-			"abs_top_builddir": root,
-		},
-		Script: "env -S '" + root + "/src/printf x%sx\\\\n A B'\n",
-	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if result.ExitCode != 0 {
-		t.Fatalf("ExitCode = %d, want 0; stdout=%q stderr=%q", result.ExitCode, result.Stdout, result.Stderr)
-	}
-	if got, want := result.Stdout, "xAx\nxBx\n"; got != want {
-		t.Fatalf("Stdout = %q, want %q", got, want)
-	}
-}
-
-func TestEnvIgnoresLargeBuiltinNamedExecutablesWhenProbingCompatWrappers(t *testing.T) {
+func TestEnvExecutesExplicitFileDespiteRegistryCollision(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -757,12 +723,13 @@ func TestEnvIgnoresLargeBuiltinNamedExecutablesWhenProbingCompatWrappers(t *test
 
 	rt := newRuntime(t, &Config{
 		FileSystem: gbruntime.ReadWriteDirectoryFileSystem(root, gbruntime.ReadWriteDirectoryOptions{}),
+		Policy:     policy.NewStatic(&policy.Config{ReadRoots: []string{"/"}, WriteRoots: []string{"/"}, SymlinkMode: policy.SymlinkFollow}),
 	})
 	result, err := rt.Run(context.Background(), &ExecutionRequest{
 		WorkDir: "/",
 		Script: "PATH=:/bin:/usr/bin\n" +
 			"export PATH\n" +
-			"env printf\n",
+			"env /printf\n",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)

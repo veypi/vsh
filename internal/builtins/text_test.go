@@ -199,7 +199,7 @@ func TestHeadPreservesRedirectedStdinOffset(t *testing.T) {
 		FileSystem: vsh.ReadWriteDirectoryFileSystem(root, vsh.ReadWriteDirectoryOptions{}),
 	})
 
-	result := mustExecSession(t, session, "printf 'a\\nb\\n' > /tmp/in.txt\n(head -n 1 >/dev/null; cat) < /tmp/in.txt\nprintf '%s\\n' '---'\n(head -n -1 >/dev/null; cat) < /tmp/in.txt\nprintf '%s\\n' '---'\nseq 70000 > /tmp/in2.txt\n(head -n-50000 >/dev/null; wc -l) < /tmp/in2.txt\n")
+	result := mustExecSession(t, session, "mkdir -p /tmp\n printf 'a\\nb\\n' > /tmp/in.txt\n(head -n 1 >/dev/null; cat) < /tmp/in.txt\nprintf '%s\\n' '---'\n(head -n -1 >/dev/null; cat) < /tmp/in.txt\nprintf '%s\\n' '---'\nseq 70000 > /tmp/in2.txt\n(head -n-50000 >/dev/null; wc -l) < /tmp/in2.txt\n")
 	if result.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0; stderr=%q", result.ExitCode, result.Stderr)
 	}

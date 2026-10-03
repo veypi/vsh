@@ -50,6 +50,9 @@ func CustomFileSystem(factory gbfs.Factory, workingDir string) gbruntime.FileSys
 
 func (f seededFSFactory) New(ctx context.Context) (gbfs.FileSystem, error) {
 	mem := gbfs.NewMemory()
+	if err := mem.MkdirAll(ctx, defaultHomeDir, 0755); err != nil {
+		return nil, err
+	}
 	for name, contents := range f.files {
 		file, err := mem.OpenFile(ctx, name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
@@ -147,17 +150,17 @@ func mustHexDecode(tb testing.TB, value string) []byte {
 func defaultBaseEnv() map[string]string {
 	arch := defaultArchMachine()
 	return map[string]string{
-		"HOME":                         defaultHomeDir,
-		"PATH":                         defaultPath,
-		"USER":                         defaultUser,
-		"LOGNAME":                      defaultUser,
-		"GROUP":                        defaultUser,
-		"GROUPS":                       defaultGID,
-		"UID":                          defaultUID,
-		"EUID":                         defaultUID,
-		"GID":                          defaultGID,
-		"EGID":                         defaultGID,
-		"SHELL":                        "/bin/sh",
+		"HOME":                       defaultHomeDir,
+		"PATH":                       defaultPath,
+		"USER":                       defaultUser,
+		"LOGNAME":                    defaultUser,
+		"GROUP":                      defaultUser,
+		"GROUPS":                     defaultGID,
+		"UID":                        defaultUID,
+		"EUID":                       defaultUID,
+		"GID":                        defaultGID,
+		"EGID":                       defaultGID,
+		"SHELL":                      "/bin/sh",
 		"VSH_ARCH":                   arch,
 		"VSH_UNAME_SYSNAME":          defaultUnameKernelName(),
 		"VSH_UNAME_NODENAME":         "vsh",

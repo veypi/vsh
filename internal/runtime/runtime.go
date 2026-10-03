@@ -29,14 +29,13 @@ type Config struct {
 	Tracing          TraceConfig
 	Logger           LogCallback
 	AnalysisObserver analysis.Observer
-	// BuiltinCommandDir 重写的 shell 内置名（echo/bg/help…）解析目录
-	// （空 = /bin；host 型文件系统无内存层 /bin 时必须指向真实 stub 目录）。
-	BuiltinCommandDir string
+	// NativeExec executes an already resolved real file. Nil disables native execution.
+	NativeExec func(context.Context, string, *commands.Invocation) error
 }
 
 type Runtime struct {
 	cfg            Config
-	sessionFactory sessionFactory
+	sessionFactory gbfs.Factory
 }
 
 type Session struct {
@@ -46,7 +45,6 @@ type Session struct {
 	bootAt      time.Time
 	currentTime time.Time
 	clockRealAt time.Time
-	layout      *sandboxLayoutState
 	mu          sync.Mutex
 	clockMu     sync.RWMutex
 }
@@ -56,7 +54,6 @@ func New(opts ...Option) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	defaultSessionFS := resolved.FileSystem.Factory == nil
 	resolved.FileSystem = resolved.FileSystem.resolved()
 	if resolved.Registry == nil {
 		resolved.Registry = builtins.DefaultRegistry()
@@ -105,19 +102,9 @@ func New(opts ...Option) (*Runtime, error) {
 	}
 	resolved.BaseEnv = mergeEnv(hostEnv, resolved.BaseEnv)
 
-	factory := sessionFactory(plainSessionFactory{base: resolved.FileSystem.Factory})
-	if defaultSessionFS {
-		factory = &preparedMemorySessionFactory{
-			base:     resolved.FileSystem.Factory,
-			env:      resolved.BaseEnv,
-			workDir:  resolved.FileSystem.WorkingDir,
-			commands: resolved.Registry.Names(),
-		}
-	}
-
 	return &Runtime{
 		cfg:            resolved,
-		sessionFactory: factory,
+		sessionFactory: resolved.FileSystem.Factory,
 	}, nil
 }
 
@@ -178,12 +165,6 @@ func (r *Runtime) NewSession(ctx context.Context) (*Session, error) {
 	}
 	fsys = wrapSandboxFileSystem(fsys)
 
-	if !r.sessionFactory.layoutReady() {
-		if err := initializeSandboxLayout(ctx, fsys, r.cfg.BaseEnv, r.cfg.FileSystem.WorkingDir, r.cfg.Registry.Names()); err != nil {
-			return nil, err
-		}
-	}
-
 	now := time.Now()
 	return &Session{
 		cfg:         r.cfg,
@@ -192,7 +173,6 @@ func (r *Runtime) NewSession(ctx context.Context) (*Session, error) {
 		bootAt:      now.UTC(),
 		currentTime: now.UTC(),
 		clockRealAt: now,
-		layout:      newSandboxLayoutState(r.cfg.BaseEnv, r.cfg.FileSystem.WorkingDir),
 	}, nil
 }
 

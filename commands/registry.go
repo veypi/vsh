@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 )
@@ -15,6 +16,8 @@ type CommandRegistry interface {
 	Register(cmd Command) error
 	RegisterLazy(name string, loader LazyCommandLoader) error
 	Lookup(name string) (Command, bool)
+	// Names lists actually registered commands for discovery and completion.
+	// Embedders may resolve additional commands through Lookup without listing them.
 	Names() []string
 }
 
@@ -55,6 +58,39 @@ func (r *Registry) Register(cmd Command) error {
 
 	r.commands[cmd.Name()] = cmd
 	return nil
+}
+
+// RegisterGuarded stores cmd by name but fails with an explicit error when the
+// name is already taken. Skill-package lifecycle code (aic-pod skillrun) uses
+// this to enforce that root commands never silently shadow builtins or other
+// packages——禁用/卸载语义的地基（2026-10-01）。
+func (r *Registry) RegisterGuarded(cmd Command) error {
+	if cmd == nil {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	name := cmd.Name()
+	if _, exists := r.commands[name]; exists {
+		return fmt.Errorf("command %q already registered", name)
+	}
+	r.commands[name] = cmd
+	return nil
+}
+
+// Unregister removes the command bound to name（不存在 = false，幂等）。
+// 在途调用持有的是 Command 实例引用，解注册只影响后续 Lookup。
+func (r *Registry) Unregister(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.commands[name]; !exists {
+		return false
+	}
+	delete(r.commands, name)
+	return true
 }
 
 // RegisterLazy registers a name that will be materialized by loader on first

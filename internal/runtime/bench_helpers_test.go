@@ -25,10 +25,6 @@ func (f benchmarkPreparedSessionFactory) New(context.Context) (gbfs.FileSystem, 
 	return f.clone(f.base)
 }
 
-func (benchmarkPreparedSessionFactory) layoutReady() bool {
-	return true
-}
-
 func benchmarkFSBackends() []benchmarkFSBackend {
 	return []benchmarkFSBackend{
 		{
@@ -65,8 +61,10 @@ func newPreparedRuntime(tb testing.TB, backend benchmarkFSBackend, files map[str
 
 	rt := newRuntime(tb, nil)
 	base := backend.new()
-	if err := initializeSandboxLayout(context.Background(), base, rt.cfg.BaseEnv, rt.cfg.FileSystem.WorkingDir, rt.cfg.Registry.Names()); err != nil {
-		tb.Fatalf("initializeSandboxLayout() error = %v", err)
+	for _, dir := range []string{defaultHomeDir, defaultTempDir} {
+		if err := base.MkdirAll(context.Background(), dir, 0755); err != nil {
+			tb.Fatal(err)
+		}
 	}
 	seedBenchmarkFiles(tb, base, files)
 

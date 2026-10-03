@@ -193,19 +193,6 @@ func logExecutionCompletion(ctx context.Context, fn LogCallback, base *LogEvent,
 	logExecutionEvent(ctx, fn, &event)
 }
 
-type layoutMutationRecorder struct {
-	layout *sandboxLayoutState
-}
-
-func (r layoutMutationRecorder) Record(event *trace.Event) {
-	if event == nil || event.Kind != trace.EventFileMutation || event.File == nil || r.layout == nil {
-		return
-	}
-	r.layout.observeFileMutation(event.File)
-}
-
-func (layoutMutationRecorder) Snapshot() []trace.Event { return nil }
-
 func redactTraceEvent(event *trace.Event) bool {
 	if event == nil || event.Command == nil || len(event.Command.Argv) == 0 {
 		return false

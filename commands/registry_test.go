@@ -78,3 +78,43 @@ func TestRegistryLazyCommandLoadsOnce(t *testing.T) {
 		t.Fatalf("Stdout = %q, want %q", got, want)
 	}
 }
+
+func TestRegisterGuardedRejectsDuplicate(t *testing.T) {
+	registry := NewRegistry()
+	first := DefineCommand("pkg", nil)
+	if err := registry.RegisterGuarded(first); err != nil {
+		t.Fatalf("RegisterGuarded(first) error = %v", err)
+	}
+	second := DefineCommand("pkg", nil)
+	if err := registry.RegisterGuarded(second); err == nil {
+		t.Fatal("RegisterGuarded(duplicate) error = nil, want explicit conflict")
+	}
+	// 冲突后原绑定不变（不发生覆盖）
+	if cmd, _ := registry.Lookup("pkg"); cmd != first {
+		t.Fatal("duplicate guard must not replace existing binding")
+	}
+	// Register 保持覆盖语义（存量调用方契约不变）
+	if err := registry.Register(second); err != nil {
+		t.Fatalf("Register(replace) error = %v", err)
+	}
+	if cmd, _ := registry.Lookup("pkg"); cmd != second {
+		t.Fatal("Register must keep replace semantics")
+	}
+}
+
+func TestUnregister(t *testing.T) {
+	registry := NewRegistry()
+	if registry.Unregister("ghost") {
+		t.Fatal("Unregister(absent) = true, want false")
+	}
+	_ = registry.Register(DefineCommand("pkg", nil))
+	if !registry.Unregister("pkg") {
+		t.Fatal("Unregister(present) = false, want true")
+	}
+	if _, ok := registry.Lookup("pkg"); ok {
+		t.Fatal("Lookup after Unregister must miss")
+	}
+	if registry.Unregister("pkg") {
+		t.Fatal("Unregister must be idempotent (second call = false)")
+	}
+}

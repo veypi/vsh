@@ -6,13 +6,13 @@ package interp
 import (
 	"context"
 	"fmt"
+	"github.com/veypi/vsh/commands"
+	"github.com/veypi/vsh/internal/commandutil"
 	"io"
 	"io/fs"
 	"os"
 	"path"
-	"strings"
 
-	"github.com/veypi/vsh/host"
 	"github.com/veypi/vsh/internal/completionutil"
 	"github.com/veypi/vsh/shell/expand"
 	"github.com/veypi/vsh/shell/syntax"
@@ -228,143 +228,61 @@ func closedExecHandler() ExecHandlerFunc {
 	}
 }
 
-func winHasExt(file string) bool {
-	i := strings.LastIndex(file, ".")
-	if i < 0 {
-		return false
-	}
-	return strings.LastIndexAny(file, `:\/`) < i
-}
-
-func pathExts(env expand.Environ, platform host.Platform) []string {
-	if env != nil && strings.TrimSpace(env.Get("VSH_PATH_EXTENSIONS_DISABLED").String()) == "1" {
-		return nil
-	}
-	hostOS := platform.OS
-	if value := strings.TrimSpace(hostOS.String()); value == "" && env != nil {
-		hostOS = host.OS(strings.TrimSpace(env.Get("VSH_HOST_OS").String()))
-	}
-	defaultExts := append([]string(nil), platform.PathExtensions...)
-	if platform.PathExtensions == nil {
-		defaultExts = hostOS.PlatformDefaults().PathExtensions
-	}
-	if len(defaultExts) == 0 {
-		return nil
-	}
-	pathext := env.Get("PATHEXT").String()
-	if pathext == "" {
-		return defaultExts
-	}
-	var exts []string
-	for e := range strings.SplitSeq(strings.ToLower(pathext), `;`) {
-		if e == "" {
-			continue
+func (r *Runner) commandLocations(ctx context.Context, name, cwd string, env expand.Environ, all, filesOnly bool) ([]commands.CommandLocation, error) {
+	vars := map[string]string{}
+	for name, variable := range env.Each() {
+		if variable.IsSet() {
+			vars[name] = variable.String()
 		}
-		if e[0] != '.' {
-			e = "." + e
-		}
-		exts = append(exts, e)
 	}
-	return exts
+	if r.lookupCommand != nil {
+		return r.lookupCommand(ctx, commands.CommandLookupRequest{Name: name, Env: vars, WorkDir: cwd, All: all, FilesOnly: filesOnly})
+	}
+	paths, err := commandutil.CommandPaths(ctx, name, cwd, vars, r.platform, all, true, func(ctx context.Context, p string) (fs.FileInfo, error) { return r.statHandler(ctx, p, true) })
+	var found []commands.CommandLocation
+	for _, p := range paths {
+		found = append(found, commands.CommandLocation{Name: path.Base(p), Path: p})
+	}
+	return found, err
 }
-
-func pathVariants(file string, exts []string) []string {
-	if len(exts) == 0 || winHasExt(file) {
-		return []string{file}
-	}
-	variants := make([]string, 0, len(exts)+1)
-	variants = append(variants, file)
-	for _, ext := range exts {
-		variants = append(variants, file+ext)
-	}
-	return variants
-}
-
 func (r *Runner) lookPath(ctx context.Context, cwd string, env expand.Environ, file string, requireExec, useDefaultPath bool) (string, error) {
-	if file == "" {
-		return "", fmt.Errorf("%q: executable file not found in $PATH", file)
-	}
-	exts := pathExts(env, r.platform)
-	if strings.ContainsRune(file, '/') {
-		return r.findPathCandidate(ctx, cwd, file, exts, requireExec)
-	}
-	pathValue := defaultExecPath
-	if !useDefaultPath {
-		pathValue = env.Get("PATH").String()
-	}
-	if pathValue == "" {
-		return "", fmt.Errorf("%q: executable file not found in $PATH", file)
-	}
-	for _, candidate := range pathSearchCandidates(pathValue, file) {
-		if found, err := r.findPathCandidate(ctx, cwd, candidate, exts, requireExec); err == nil {
-			return found, nil
-		}
-	}
-	return "", fmt.Errorf("%q: executable file not found in $PATH", file)
-}
-
-func (r *Runner) lookPathForHash(ctx context.Context, cwd string, env expand.Environ, file string) (string, error) {
-	if file == "" {
-		return "", fmt.Errorf("%q: executable file not found in $PATH", file)
-	}
-	exts := pathExts(env, r.platform)
-	if strings.ContainsRune(file, '/') {
-		if _, err := r.findPathCandidate(ctx, cwd, file, exts, true); err != nil {
-			return "", err
-		}
-		return file, nil
-	}
-	pathValue := env.Get("PATH").String()
-	if pathValue == "" {
-		return "", fmt.Errorf("%q: executable file not found in $PATH", file)
-	}
-	for _, candidate := range pathSearchCandidates(pathValue, file) {
-		if _, err := r.findPathCandidate(ctx, cwd, candidate, exts, true); err == nil {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("%q: executable file not found in $PATH", file)
-}
-
-func pathSearchCandidates(pathValue, file string) []string {
-	if pathValue == "" {
-		return nil
-	}
-	candidates := make([]string, 0, strings.Count(pathValue, ":")+1)
-	for elem := range strings.SplitSeq(pathValue, ":") {
-		elem = strings.TrimSpace(elem)
-		switch elem {
-		case "", ".":
-			candidates = append(candidates, "./"+file)
-		default:
-			candidates = append(candidates, path.Join(elem, file))
-		}
-	}
-	return candidates
-}
-
-func (r *Runner) findPathCandidate(ctx context.Context, cwd, file string, exts []string, requireExec bool) (string, error) {
-	base := file
-	if !path.IsAbs(base) {
-		base = path.Join(cwd, base)
-	}
-	base = path.Clean(base)
-	for _, candidate := range pathVariants(base, exts) {
-		info, err := r.statHandler(ctx, candidate, true)
-		if err != nil {
-			continue
-		}
-		if info.IsDir() {
-			return "", fmt.Errorf("is a directory")
-		}
-		if requireExec && r.requireExecutableBit() {
-			if err := r.access(ctx, candidate, access_X_OK); err != nil {
-				return "", fmt.Errorf("permission denied")
+	if !requireExec {
+		vars := map[string]string{}
+		for k, v := range env.Each() {
+			if v.IsSet() {
+				vars[k] = v.String()
 			}
 		}
-		return candidate, nil
+		paths, err := commandutil.CommandPaths(ctx, file, cwd, vars, r.platform, false, false, func(ctx context.Context, p string) (fs.FileInfo, error) { return r.statHandler(ctx, p, true) })
+		if err != nil {
+			return "", err
+		}
+		if len(paths) > 0 {
+			return paths[0], nil
+		}
+		return "", fmt.Errorf("%q: executable file not found in $PATH", file)
 	}
-	return "", fs.ErrNotExist
+	if useDefaultPath {
+		env = expand.ListEnviron("PATH=" + defaultExecPath)
+	}
+	found, err := r.commandLocations(ctx, file, cwd, env, false, true)
+	if err == nil && len(found) > 0 {
+		return found[0].Path, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("%q: executable file not found in $PATH", file)
+}
+func (r *Runner) lookPathForHash(ctx context.Context, cwd string, env expand.Environ, file string) (string, error) {
+	found, err := r.commandLocations(ctx, file, cwd, env, false, false)
+	if err == nil && len(found) > 0 {
+		return found[0].Path, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("%q: executable file not found in $PATH", file)
 }
 
 func isLookupNotFound(err error, file string) bool {

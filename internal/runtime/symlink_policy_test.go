@@ -17,6 +17,9 @@ type symlinkFSFactory struct {
 
 func (f symlinkFSFactory) New(ctx context.Context) (gbfs.FileSystem, error) {
 	mem := gbfs.NewMemory()
+	if err := mem.MkdirAll(ctx, defaultHomeDir, 0755); err != nil {
+		return nil, err
+	}
 	for name, contents := range f.files {
 		file, err := mem.OpenFile(ctx, name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {

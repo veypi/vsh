@@ -4,28 +4,17 @@
 `vsh` is a Go workspace for a deterministic shell runtime. `contrib/` houses optional heavyweight modules (`sqlite3`, `jq`, `yq`, `extras`). Read `SPEC.md` before changing runtime boundaries or sandbox behavior.
 
 ## Build & Test
-Use Go 1.26+. The full workspace build/test command spans multiple modules:
+Use Go 1.26+. The fork removed the upstream Makefile, Nix flake and oracle download scripts. From this module run:
 
 ```sh
-make build
-make test
+go build ./...
+go test ./...
+go vet ./...
 ```
 
-`make test` resolves the pinned GNU `diff` and `ripgrep` oracles through Nix via `./scripts/ensure-diffutils.sh` and `./scripts/ensure-ripgrep.sh`. Set `VSH_CONFORMANCE_DIFF` or `VSH_CONFORMANCE_RIPGREP` if you need to point tests at already-installed pinned binaries.
+Before submitting or updating a PR, run `go vet ./...` and fix reported issues. Optional contrib modules have their own go.mod; compile and test the modules used by the consuming application separately.
 
-Before submitting or updating a PR, run `make lint` from the repo root and fix any reported issues.
-
-## Conformance & Bats Tests
-
-Conformance tests compare vsh behavior against pinned bash, dash, mksh, zsh, and curl oracles. `dash` stands in for the supported `sh` variant. Bats tests validate shell scripts in `scripts/`. The `diff` and `ripgrep` oracle tests and these suites require Nix installed to fetch pinned binaries unless you provide the corresponding override env vars.
-
-```sh
-make conformance-test   # compares vsh vs pinned bash/dash/mksh/zsh/curl oracles
-make bats-test          # scripts/ test suite
-
-# Run a single conformance test file
-make conformance-test CONFORMANCE_RUN='TestConformance/bash/oils/append.test.sh'
-```
+`TestDiffMatchesGNUDiff` and the ripgrep oracle tests require the exact versions checked by the test. Set `VSH_CONFORMANCE_DIFF` and `VSH_CONFORMANCE_RIPGREP` to those binaries. When an oracle is unavailable, explicitly exclude that test and report the gap; do not claim full conformance. The upstream Nix-based conformance/bats commands are not available in this fork.
 
 ## Key Project Rules
 - Unknown commands must never fall through to the host OS.
@@ -43,4 +32,4 @@ make conformance-test CONFORMANCE_RUN='TestConformance/bash/oils/append.test.sh'
 Read the relevant `SPEC.md` sections before editing code, and update them once the design is clear. When in doubt, prefer a small SPEC update over silent drift.
 
 ## Commits & PRs
-Use short, imperative subjects scoped to one change (e.g., `runtime: normalize command-not-found errors`). PRs should explain user-visible behavior, note any SPEC updates, include trace/CLI output when changing execution behavior, and only be submitted after a clean local `make lint`.
+Use short, imperative subjects scoped to one change (e.g., `runtime: normalize command-not-found errors`). PRs should explain user-visible behavior, note any SPEC updates, include trace/CLI output when changing execution behavior, and only be submitted after the build, applicable tests and `go vet ./...` pass.

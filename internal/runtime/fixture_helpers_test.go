@@ -89,6 +89,11 @@ func runExecutionFixture(t testing.TB, fixture *executionFixture) *ExecutionResu
 		Tracing: TraceConfig{Mode: TraceRaw},
 	})
 	seedSessionFiles(t, session, fixture.Files)
+	if fixture.WorkDir != "" {
+		if err := session.FileSystem().MkdirAll(context.Background(), fixture.WorkDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	result, err := session.Exec(context.Background(), &ExecutionRequest{
 		Script:     fixture.Script,

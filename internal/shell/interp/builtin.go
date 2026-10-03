@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -44,56 +43,7 @@ func IsBuiltin(name string) bool {
 	return completionutil.IsBuiltinName(name)
 }
 
-var runtimeBuiltinNames = []string{
-	"[",
-	":",
-	".",
-	"alias",
-	"break",
-	"builtin",
-	"caller",
-	"cd",
-	"command",
-	"compgen",
-	"complete",
-	"compopt",
-	"continue",
-	"declare",
-	"dirs",
-	"echo",
-	"enable",
-	"eval",
-	"exec",
-	"exit",
-	"export",
-	"false",
-	"getopts",
-	"hash",
-	"local",
-	"mapfile",
-	"popd",
-	"printf",
-	"pushd",
-	"pwd",
-	"read",
-	"readarray",
-	"readonly",
-	"return",
-	"set",
-	"shift",
-	"shopt",
-	"source",
-	"test",
-	"times",
-	"trap",
-	"true",
-	"type",
-	"typeset",
-	"ulimit",
-	"unalias",
-	"unset",
-	"wait",
-}
+var runtimeBuiltinNames = completionutil.BuiltinNames("")
 
 const disabledBuiltinsEnvVar = "VSH_DISABLED_BUILTINS"
 
@@ -2541,7 +2491,7 @@ func (r *Runner) hashBuiltin(ctx context.Context, args []string) (exit exitStatu
 			exit.code = 1
 			continue
 		}
-		if strings.ContainsRune(name, '/') {
+		if path == "" || strings.ContainsRune(name, '/') {
 			continue
 		}
 		r.commandHashRemember(name, path)
@@ -2962,6 +2912,7 @@ const (
 	shellTypeSpecialBuiltin
 	shellTypeBuiltin
 	shellTypeFile
+	shellTypeRegistered
 )
 
 type shellTypeOutputMode uint8
@@ -2981,7 +2932,7 @@ type shellTypeMatch struct {
 }
 
 func (r *Runner) typeMatches(ctx context.Context, name string, mode shellTypeMode) ([]shellTypeMatch, bool) {
-	files := r.typeFileMatches(ctx, name, mode.all, mode.output != shellTypeOutputKind)
+	files := r.typeFileMatches(ctx, name, mode.all, mode.output == shellTypeOutputForcePath)
 	if mode.output == shellTypeOutputForcePath {
 		return files, len(files) > 0
 	}
@@ -3075,74 +3026,20 @@ func (r *Runner) typeMatches(ctx context.Context, name string, mode shellTypeMod
 	return matches, foundNonFile || len(files) > 0
 }
 
-func (r *Runner) typeFileMatches(ctx context.Context, name string, all, requireExec bool) []shellTypeMatch {
-	pathList := filepath.SplitList(r.writeEnv.Get("PATH").String())
-	if len(pathList) == 0 {
-		pathList = []string{""}
-	}
-	chars := `/`
-	if r.hostOS() == "windows" {
-		chars = `:\/`
-	}
-	exts := pathExts(r.writeEnv, r.platform)
-	if strings.ContainsAny(name, chars) {
-		if path, err := r.typeExecutablePath(ctx, name, exts, true); err == nil {
-			return []shellTypeMatch{{kind: shellTypeFile, path: path}}
-		}
+func (r *Runner) typeFileMatches(ctx context.Context, name string, all, filesOnly bool) []shellTypeMatch {
+	locations, err := r.commandLocations(ctx, name, r.Dir, r.writeEnv, all, filesOnly)
+	if err != nil {
 		return nil
 	}
-
-	matches := make([]shellTypeMatch, 0, 1)
-	for _, elem := range pathList {
-		path := "." + string(filepath.Separator) + name
-		if elem != "" && elem != "." {
-			path = filepath.Join(elem, name)
-		}
-		if found, err := r.typeExecutablePath(ctx, path, exts, requireExec); err == nil {
-			matches = append(matches, shellTypeMatch{kind: shellTypeFile, path: found})
-			if !all {
-				break
-			}
+	var matches []shellTypeMatch
+	for _, loc := range locations {
+		if loc.Path == "" {
+			matches = append(matches, shellTypeMatch{kind: shellTypeRegistered})
+		} else {
+			matches = append(matches, shellTypeMatch{kind: shellTypeFile, path: loc.Path})
 		}
 	}
 	return matches
-}
-
-func (r *Runner) typeExecutablePath(ctx context.Context, name string, exts []string, requireExec bool) (string, error) {
-	if len(exts) == 0 {
-		return r.typeStatExecutable(ctx, name, requireExec)
-	}
-	if winHasExt(name) {
-		if path, err := r.typeStatExecutable(ctx, name, requireExec); err == nil {
-			return path, nil
-		}
-	}
-	if len(exts) > 0 {
-		if path, err := r.typeStatExecutable(ctx, name, requireExec); err == nil {
-			return path, nil
-		}
-	}
-	for _, ext := range exts {
-		if path, err := r.typeStatExecutable(ctx, name+ext, requireExec); err == nil {
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("not found")
-}
-
-func (r *Runner) typeStatExecutable(ctx context.Context, name string, requireExec bool) (string, error) {
-	info, err := r.stat(ctx, name)
-	if err != nil {
-		return "", err
-	}
-	mode := info.Mode()
-	if mode.IsDir() {
-		return "", fmt.Errorf("is a directory")
-	}
-	if requireExec && r.requireExecutableBit() && mode&0o111 == 0 {
-		return "", fmt.Errorf("permission denied")
-	}
-	return name, nil
 }
 
 func (r *Runner) printTypeMatch(name string, match shellTypeMatch, mode shellTypeMode) error {
@@ -3158,6 +3055,8 @@ func (r *Runner) printTypeMatch(name string, match shellTypeMatch, mode shellTyp
 			return r.writeBuiltinString("type", "builtin\n")
 		case shellTypeBuiltin:
 			return r.writeBuiltinString("type", "builtin\n")
+		case shellTypeRegistered:
+			return r.writeBuiltinString("type", "registered\n")
 		case shellTypeFile:
 			return r.writeBuiltinString("type", "file\n")
 		}
@@ -3193,6 +3092,8 @@ func (r *Runner) printTypeMatch(name string, match shellTypeMatch, mode shellTyp
 		return r.writeBuiltinf("type", "%s is a shell builtin\n", name)
 	case shellTypeBuiltin:
 		return r.writeBuiltinf("type", "%s is a shell builtin\n", name)
+	case shellTypeRegistered:
+		return r.writeBuiltinf("type", "%s is a registered command\n", name)
 	case shellTypeFile:
 		return r.writeBuiltinf("type", "%s is %s\n", name, match.path)
 	}

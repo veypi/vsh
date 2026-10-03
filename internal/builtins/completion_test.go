@@ -2,14 +2,10 @@ package builtins_test
 
 import (
 	"context"
-	"slices"
 	"strings"
 	"testing"
 
 	vsh "github.com/veypi/vsh"
-	"github.com/veypi/vsh/commands"
-	"github.com/veypi/vsh/internal/builtins"
-	"github.com/veypi/vsh/internal/shellstate"
 )
 
 func TestCompoptPersistsAcrossCommandsInScript(t *testing.T) {
@@ -56,62 +52,24 @@ func TestCompoptInvalidOptionReturnsExitCodeTwo(t *testing.T) {
 
 func TestCompoptModifiesDefaultAndEmptyCompletionScopes(t *testing.T) {
 	t.Parallel()
-	state := shellstate.NewCompletionState()
-	ctx := shellstate.WithCompletionState(context.Background(), state)
-
-	if exitCode := runBuiltin(t, ctx, builtins.NewComplete(), "-F", "myfunc", "-D"); exitCode != 0 {
-		t.Fatalf("complete -F myfunc -D exit code = %d, want 0", exitCode)
+	session := newSession(t, &Config{})
+	result := mustExecSession(t, session, "complete -F myfunc -D\ncompopt -D -o nospace -o filenames\ncomplete -W '' -E\ncompopt -E -o default\ncomplete -p -D\ncomplete -p -E\n")
+	if result.ExitCode != 0 || result.Stderr != "" {
+		t.Fatalf("result = %+v", result)
 	}
-	if exitCode := runBuiltin(t, ctx, builtins.NewCompopt(), "-D", "-o", "nospace", "-o", "filenames"); exitCode != 0 {
-		t.Fatalf("compopt -D exit code = %d, want 0", exitCode)
-	}
-	defaultSpec, ok := state.Get(shellstate.CompletionSpecDefaultKey)
-	if !ok {
-		t.Fatalf("default completion spec missing")
-	}
-	if !defaultSpec.IsDefault {
-		t.Fatalf("default completion spec IsDefault = false, want true")
-	}
-	if got, want := defaultSpec.Function, "myfunc"; got != want || !defaultSpec.HasFunction {
-		t.Fatalf("default completion function = %q (has=%v), want %q", got, defaultSpec.HasFunction, want)
-	}
-	if got, want := defaultSpec.Options, []string{"nospace", "filenames"}; !slices.Equal(got, want) {
-		t.Fatalf("default completion options = %v, want %v", got, want)
-	}
-
-	if exitCode := runBuiltin(t, ctx, builtins.NewCompopt(), "-E", "-o", "default"); exitCode != 0 {
-		t.Fatalf("compopt -E exit code = %d, want 0", exitCode)
-	}
-	emptySpec, ok := state.Get(shellstate.CompletionSpecEmptyKey)
-	if !ok {
-		t.Fatalf("empty-line completion spec missing")
-	}
-	if got, want := emptySpec.Options, []string{"default"}; !slices.Equal(got, want) {
-		t.Fatalf("empty-line completion options = %v, want %v", got, want)
+	for _, part := range []string{"-F myfunc", "-o nospace", "-o filenames", "-D", "-o default", "-E"} {
+		if !strings.Contains(result.Stdout, part) {
+			t.Fatalf("missing %q in %q", part, result.Stdout)
+		}
 	}
 }
 
 func TestCompoptPreservesExistingSpecWhileDisablingOptions(t *testing.T) {
 	t.Parallel()
-	state := shellstate.NewCompletionState()
-	ctx := shellstate.WithCompletionState(context.Background(), state)
-
-	if exitCode := runBuiltin(t, ctx, builtins.NewComplete(), "-o", "nospace", "-o", "filenames", "-F", "myfunc", "cmd"); exitCode != 0 {
-		t.Fatalf("complete exit code = %d, want 0", exitCode)
-	}
-	if exitCode := runBuiltin(t, ctx, builtins.NewCompopt(), "+o", "nospace", "cmd"); exitCode != 0 {
-		t.Fatalf("compopt exit code = %d, want 0", exitCode)
-	}
-
-	spec, ok := state.Get("cmd")
-	if !ok {
-		t.Fatalf("command completion spec missing")
-	}
-	if got, want := spec.Function, "myfunc"; got != want || !spec.HasFunction {
-		t.Fatalf("completion function = %q (has=%v), want %q", got, spec.HasFunction, want)
-	}
-	if got, want := spec.Options, []string{"filenames"}; !slices.Equal(got, want) {
-		t.Fatalf("completion options = %v, want %v", got, want)
+	session := newSession(t, &Config{})
+	result := mustExecSession(t, session, "complete -o nospace -o filenames -F myfunc cmd\ncompopt +o nospace cmd\ncomplete -p cmd\n")
+	if result.ExitCode != 0 || result.Stdout != "complete -o filenames -F myfunc cmd\n" {
+		t.Fatalf("result = %+v", result)
 	}
 }
 
@@ -143,16 +101,16 @@ func TestCompoptPersistsAcrossInteractiveEntries(t *testing.T) {
 	}
 }
 
-func TestCompletionWrappersShareStateWithShellBuiltins(t *testing.T) {
+func TestCompletionBuiltinsShareState(t *testing.T) {
 	t.Parallel()
 	session := newSession(t, &Config{})
 
 	result := mustExecSession(t, session, ""+
 		"complete -W 'foo bar' cmd\n"+
-		"/bin/complete -p cmd\n"+
+		"builtin complete -p cmd\n"+
 		"compopt -o nospace cmd\n"+
-		"/bin/complete -p cmd\n"+
-		"/bin/compopt +o nospace cmd\n"+
+		"builtin complete -p cmd\n"+
+		"builtin compopt +o nospace cmd\n"+
 		"complete -p cmd\n")
 	if result.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 (stderr=%q)", result.ExitCode, result.Stderr)
@@ -169,7 +127,7 @@ func TestCompletionWrappersShareStateWithShellBuiltins(t *testing.T) {
 	}
 }
 
-func TestCompgenMatchesAcrossBuiltinAndWrapperEntryPoints(t *testing.T) {
+func TestCompgenBuiltinEntryPoints(t *testing.T) {
 	t.Parallel()
 	session := newSession(t, &Config{})
 
@@ -180,7 +138,7 @@ func TestCompgenMatchesAcrossBuiltinAndWrapperEntryPoints(t *testing.T) {
 		"echo ---\n"+
 		"command compgen -A builtin g\n"+
 		"echo ---\n"+
-		"/bin/compgen -A builtin g\n")
+		"builtin compgen -A builtin g\n")
 	if result.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0 (stderr=%q)", result.ExitCode, result.Stderr)
 	}
@@ -252,30 +210,4 @@ func TestCompgenCommandActionRespectsDisabledBuiltins(t *testing.T) {
 	if got := result.Stderr; got != "" {
 		t.Fatalf("Stderr = %q, want empty", got)
 	}
-}
-
-func runBuiltin(tb testing.TB, ctx context.Context, cmd commands.Command, args ...string) (exitCode int) {
-	tb.Helper()
-
-	var outBuf strings.Builder
-	var errBuf strings.Builder
-	inv := commands.NewInvocation(&commands.InvocationOptions{
-		Args:   append([]string(nil), args...),
-		Env:    defaultBaseEnv(),
-		Cwd:    defaultHomeDir,
-		Stdin:  strings.NewReader(""),
-		Stdout: &outBuf,
-		Stderr: &errBuf,
-	})
-
-	err := commands.RunCommand(ctx, cmd, inv)
-	if err != nil {
-		code, ok := commands.ExitCode(err)
-		if !ok {
-			tb.Fatalf("RunCommand(%T, %v) error = %v", cmd, args, err)
-		}
-		exitCode = code
-	}
-
-	return exitCode
 }

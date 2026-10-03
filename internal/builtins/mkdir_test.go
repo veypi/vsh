@@ -137,13 +137,12 @@ func TestMkdirParentsKeepsUserWriteExecuteOnIntermediateDirectories(t *testing.T
 	}
 }
 
-func TestMkdirRemapsCompatHostAbsolutePaths(t *testing.T) {
+func TestMkdirKeepsAbsolutePathsLiteral(t *testing.T) {
 	t.Parallel()
 	env := defaultBaseEnv()
-	env["VSH_COMPAT_ROOT"] = "/compat"
 	session := newSession(t, &Config{BaseEnv: env})
 
-	result := mustExecSession(t, session, "mkdir /testdir\ncd /testdir\nmkdir -p /compat/testdir/t\nprintf 'status=%s\\n' \"$?\"\ntest -d /testdir/t\nprintf 'exists=%s\\n' \"$?\"\n")
+	result := mustExecSession(t, session, "mkdir /testdir\ncd /testdir\nmkdir -p /compat/testdir/t\nprintf 'status=%s\\n' \"$?\"\ntest -d /compat/testdir/t\nprintf 'exists=%s\\n' \"$?\"\n")
 	if got, want := result.Stdout, "status=0\nexists=0\n"; got != want {
 		t.Fatalf("Stdout = %q, want %q; stderr=%q", got, want, result.Stderr)
 	}

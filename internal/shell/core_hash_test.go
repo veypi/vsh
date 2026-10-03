@@ -57,7 +57,7 @@ hash
 	}
 	// vsh fork (D14): `hash whoami` still seeds the entry, but executing a
 	// registry command never consults the hash cache — hits stay 0.
-	if got, want := stdout.String(), "status=1\nhits\tcommand\n   0\t/bin/whoami\n"; got != want {
+	if got, want := stdout.String(), "status=1\nhash: hash table empty\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got, want := stderr.String(), "hash: _nonexistent_: not found\n"; got != want {
@@ -86,10 +86,10 @@ hash
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got, want := stdout.String(), "status=0\nhash: hash table empty\n"; got != want {
+	if got, want := stdout.String(), "status=1\nhash: hash table empty\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
-	if got := stderr.String(); got != "" {
+	if got := stderr.String(); got != "hash: /bin/whoami: not found\n" {
 		t.Fatalf("stderr = %q, want empty", got)
 	}
 }
@@ -117,7 +117,7 @@ hash
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got, want := stdout.String(), "status=0\nhits\tcommand\n   0\t/bin/whoami\n"; got != want {
+	if got, want := stdout.String(), "status=0\nhash: hash table empty\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got := stderr.String(); got != "" {
@@ -146,7 +146,7 @@ hash
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got, want := stdout.String(), "hits\tcommand\n   0\t/bin/whoami\n"; got != want {
+	if got, want := stdout.String(), "hash: hash table empty\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got := stderr.String(); got != "" {
@@ -234,7 +234,7 @@ echo status=$?
 	if got, want := stdout.String(), "two\nstatus=0\nstatus=127\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
-	if got, want := stderr.String(), "two/mycmd: No such file or directory\n"; got != want {
+	if got, want := stderr.String(), "/tmp/two/mycmd: No such file or directory\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }
@@ -253,13 +253,13 @@ func TestRunHashBuiltinRehashesStaleEntries(t *testing.T) {
 		Script: `
 cd /tmp
 PATH="one:two:$PATH"
-/bin/mkdir -p one two
+mkdir -p one two
 echo 'echo two' > two/mycmd
-/bin/chmod +x two/mycmd
+chmod +x two/mycmd
 hash mycmd
-/bin/rm two/mycmd
+rm two/mycmd
 echo 'echo one' > one/mycmd
-/bin/chmod +x one/mycmd
+chmod +x one/mycmd
 hash mycmd
 echo status=$?
 hash
@@ -274,7 +274,7 @@ hash
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got, want := stdout.String(), "status=0\nhits\tcommand\n   0\tone/mycmd\n"; got != want {
+	if got, want := stdout.String(), "status=0\nhits\tcommand\n   0\t/tmp/one/mycmd\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got := stderr.String(); got != "" {
@@ -335,9 +335,9 @@ func TestRunCommandPBypassesCommandHash(t *testing.T) {
 
 	_, err := Run(context.Background(), &Execution{
 		Script: `
-/bin/mkdir -p /tmp/custom
+mkdir -p /tmp/custom
 echo 'echo custom' > /tmp/custom/foo
-/bin/chmod +x /tmp/custom/foo
+chmod +x /tmp/custom/foo
 PATH="/tmp/custom:$PATH"
 hash foo
 command -p foo >/dev/null 2>/dev/null
@@ -374,12 +374,12 @@ func TestRunCommandPRefreshesCommandHash(t *testing.T) {
 
 	_, err := Run(context.Background(), &Execution{
 		Script: `
-/bin/mkdir -p /tmp/custom
+mkdir -p /tmp/custom
 printf '%s\n' placeholder > /tmp/custom/mkdir
-/bin/chmod +x /tmp/custom/mkdir
+chmod +x /tmp/custom/mkdir
 PATH="/tmp/custom:$PATH"
 hash mkdir
-/bin/rm /tmp/custom/mkdir
+rm /tmp/custom/mkdir
 command -p mkdir -p /tmp/from-default >/dev/null
 hash
 mkdir -p /tmp/plain
@@ -397,7 +397,7 @@ mkdir -p /tmp/plain
 	// vsh fork (D14): `command -p mkdir` and the trailing `mkdir` resolve via
 	// the registry, so the seeded /tmp/custom/mkdir entry is never refreshed
 	// or hit.
-	if got, want := stdout.String(), "hits\tcommand\n   0\t/tmp/custom/mkdir\n"; got != want {
+	if got, want := stdout.String(), "hash: hash table empty\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got := stderr.String(); got != "" {

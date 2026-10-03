@@ -413,7 +413,7 @@ func TestReplaceEnvDoesNotUseSessionBaseEnv(t *testing.T) {
 			"PATH": defaultPath,
 			"HOME": "",
 		},
-		Script: "echo \"${FOO:-missing}\"\n/bin/pwd\n",
+		Script: "echo \"${FOO:-missing}\"\nenv pwd\n",
 	})
 	if err != nil {
 		t.Fatalf("Exec() error = %v", err)

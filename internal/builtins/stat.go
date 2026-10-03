@@ -653,7 +653,7 @@ func statFollowPath(ctx context.Context, inv *Invocation, name string) (stdfs.Fi
 	if !hasTrailingSlash(name) {
 		return info, abs, nil
 	}
-	resolvedName := remapCompatHostPath(inv, name)
+	resolvedName := name
 	if !strings.HasSuffix(resolvedName, "/") {
 		resolvedName += "/"
 	}
