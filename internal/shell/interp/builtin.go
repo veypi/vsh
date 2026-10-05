@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/veypi/vsh/commands"
 	"github.com/veypi/vsh/internal/completionutil"
 	"github.com/veypi/vsh/internal/printfutil"
 	"github.com/veypi/vsh/internal/shellstate"
@@ -213,7 +214,7 @@ func (r *Runner) failShellBuiltinWrite(name string, err error) exitStatus {
 }
 
 func (r *Runner) shellBuiltinWriteExit(name string, err error) exitStatus {
-	if printfBrokenPipe(err) {
+	if commands.BrokenPipe(err) {
 		return exitStatus{}
 	}
 	return r.failShellBuiltinWrite(name, err)
@@ -527,7 +528,7 @@ func (r *Runner) printfBuiltin(args []string) (exit exitStatus) {
 	}
 	if destRef == nil {
 		if _, err := io.WriteString(r.stdout, result.Output); err != nil {
-			if printfBrokenPipe(err) {
+			if commands.BrokenPipe(err) {
 				if result.ExitCode != 0 {
 					exit.code = result.ExitCode
 				}
@@ -3297,13 +3298,6 @@ func (r *Runner) optStatusText(status bool) string {
 	return "off"
 }
 
-func printfBrokenPipe(err error) bool {
-	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) {
-		return true
-	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "broken pipe") || strings.Contains(lower, "closed pipe")
-}
 
 func (r *Runner) lookupPrintfEnv(name string) (string, bool) {
 	vr := r.lookupVar(name)

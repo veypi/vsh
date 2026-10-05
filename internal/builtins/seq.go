@@ -729,12 +729,9 @@ func seqFindDirective(format string) (start, end int, err error) {
 	return directiveStart, directiveEnd, nil
 }
 
-func seqBrokenPipe(err error) bool {
-	return errors.Is(err, io.ErrClosedPipe) || strings.Contains(strings.ToLower(err.Error()), "broken pipe")
-}
 
 func seqWriteError(inv *Invocation, err error) error {
-	if seqBrokenPipe(err) {
+	if BrokenPipe(err) {
 		return nil
 	}
 	if diag, ok := shellWriteErrorDiagnostic("seq", err); ok {

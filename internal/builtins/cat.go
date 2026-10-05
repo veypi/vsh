@@ -8,7 +8,6 @@ import (
 	stdfs "io/fs"
 	"os"
 	"strings"
-	"syscall"
 
 	"github.com/veypi/vsh/internal/commandutil"
 )
@@ -501,19 +500,12 @@ func catWriteExitError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if catBrokenPipe(err) {
+	if BrokenPipe(err) {
 		return &ExitError{Code: 141}
 	}
 	return &ExitError{Code: 1, Err: err}
 }
 
-func catBrokenPipe(err error) bool {
-	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) {
-		return true
-	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "broken pipe") || strings.Contains(lower, "closed pipe")
-}
 
 func writeCatNewLine(w io.Writer, opts catOptions, state *catOutputState) error {
 	if state == nil {

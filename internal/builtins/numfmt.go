@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -256,13 +255,13 @@ func (c *Numfmt) RunParsed(ctx context.Context, inv *Invocation, matches *Parsed
 
 	flushErr := writer.Flush()
 	if err != nil {
-		if flushErr != nil && numfmtBrokenPipe(flushErr) {
+		if flushErr != nil && BrokenPipe(flushErr) {
 			return nil
 		}
 		return numfmtExit(inv, err)
 	}
 	if flushErr != nil {
-		if numfmtBrokenPipe(flushErr) {
+		if BrokenPipe(flushErr) {
 			return nil
 		}
 		return &ExitError{Code: 1, Err: flushErr}
@@ -1511,11 +1510,6 @@ func numfmtWriteRawLine(writer io.Writer, line []byte, emitTerminator bool, term
 	return nil
 }
 
-func numfmtBrokenPipe(err error) bool {
-	return errors.Is(err, io.ErrClosedPipe) ||
-		errors.Is(err, syscall.EPIPE) ||
-		strings.Contains(strings.ToLower(err.Error()), "broken pipe")
-}
 
 func numfmtIllegalf(format string, args ...any) error {
 	return &numfmtError{code: 1, msg: "numfmt: " + fmt.Sprintf(format, args...)}
@@ -1533,7 +1527,7 @@ func numfmtExit(inv *Invocation, err error) error {
 	if err == nil {
 		return nil
 	}
-	if numfmtBrokenPipe(err) {
+	if BrokenPipe(err) {
 		return nil
 	}
 

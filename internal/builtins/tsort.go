@@ -151,13 +151,13 @@ func (g *tsortGraph) run(ctx context.Context, inv *Invocation) error {
 		current := frontier[0]
 		frontier = frontier[1:]
 		if _, err := writer.WriteString(current); err != nil {
-			if tsortBrokenPipe(err) {
+			if BrokenPipe(err) {
 				return nil
 			}
 			return &ExitError{Code: 1, Err: err}
 		}
 		if err := writer.WriteByte('\n'); err != nil {
-			if tsortBrokenPipe(err) {
+			if BrokenPipe(err) {
 				return nil
 			}
 			return &ExitError{Code: 1, Err: err}
@@ -179,7 +179,7 @@ func (g *tsortGraph) run(ctx context.Context, inv *Invocation) error {
 	}
 
 	if err := writer.Flush(); err != nil {
-		if tsortBrokenPipe(err) {
+		if BrokenPipe(err) {
 			return nil
 		}
 		return &ExitError{Code: 1, Err: err}
@@ -344,9 +344,6 @@ func tsortDisplayName(name string) string {
 	return name
 }
 
-func tsortBrokenPipe(err error) bool {
-	return errors.Is(err, io.ErrClosedPipe) || strings.Contains(strings.ToLower(err.Error()), "broken pipe")
-}
 
 var _ Command = (*Tsort)(nil)
 var _ SpecProvider = (*Tsort)(nil)

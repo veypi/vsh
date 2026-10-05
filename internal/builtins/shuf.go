@@ -278,7 +278,7 @@ func (c *Shuf) runShuf(ctx context.Context, inv *Invocation, opts *shufOptions) 
 	buffered := bufio.NewWriter(outputWriter)
 	runErr := runShufPreparedInput(ctx, inv, buffered, rng, &input, opts, sep)
 	flushErr := buffered.Flush()
-	if flushErr != nil && !shufBrokenPipe(flushErr) {
+	if flushErr != nil && !BrokenPipe(flushErr) {
 		if runErr == nil {
 			runErr = &ExitError{Code: 1, Err: flushErr}
 		}
@@ -301,7 +301,7 @@ func (c *Shuf) runShuf(ctx context.Context, inv *Invocation, opts *shufOptions) 
 	if runErr != nil {
 		return runErr
 	}
-	if flushErr != nil && shufBrokenPipe(flushErr) {
+	if flushErr != nil && BrokenPipe(flushErr) {
 		return nil
 	}
 	return nil
@@ -391,7 +391,7 @@ func shufRunByteSlice(ctx context.Context, inv *Invocation, writer *bufio.Writer
 					return shufRandomExecutionError(inv, opts.randomSource, err)
 				}
 				if err := shufWriteBytesRecord(writer, records[index], sep); err != nil {
-					if shufBrokenPipe(err) {
+					if BrokenPipe(err) {
 						return nil
 					}
 					return &ExitError{Code: 1, Err: err}
@@ -407,7 +407,7 @@ func shufRunByteSlice(ctx context.Context, inv *Invocation, writer *bufio.Writer
 				return shufRandomExecutionError(inv, opts.randomSource, err)
 			}
 			if err := shufWriteBytesRecord(writer, records[index], sep); err != nil {
-				if shufBrokenPipe(err) {
+				if BrokenPipe(err) {
 					return nil
 				}
 				return &ExitError{Code: 1, Err: err}
@@ -428,7 +428,7 @@ func shufRunByteSlice(ctx context.Context, inv *Invocation, writer *bufio.Writer
 			return err
 		}
 		if err := shufWriteBytesRecord(writer, records[i], sep); err != nil {
-			if shufBrokenPipe(err) {
+			if BrokenPipe(err) {
 				return nil
 			}
 			return &ExitError{Code: 1, Err: err}
@@ -452,7 +452,7 @@ func shufRunStringSlice(ctx context.Context, inv *Invocation, writer *bufio.Writ
 					return shufRandomExecutionError(inv, opts.randomSource, err)
 				}
 				if err := shufWriteStringRecord(writer, args[index], sep); err != nil {
-					if shufBrokenPipe(err) {
+					if BrokenPipe(err) {
 						return nil
 					}
 					return &ExitError{Code: 1, Err: err}
@@ -468,7 +468,7 @@ func shufRunStringSlice(ctx context.Context, inv *Invocation, writer *bufio.Writ
 				return shufRandomExecutionError(inv, opts.randomSource, err)
 			}
 			if err := shufWriteStringRecord(writer, args[index], sep); err != nil {
-				if shufBrokenPipe(err) {
+				if BrokenPipe(err) {
 					return nil
 				}
 				return &ExitError{Code: 1, Err: err}
@@ -489,7 +489,7 @@ func shufRunStringSlice(ctx context.Context, inv *Invocation, writer *bufio.Writ
 			return err
 		}
 		if err := shufWriteStringRecord(writer, args[i], sep); err != nil {
-			if shufBrokenPipe(err) {
+			if BrokenPipe(err) {
 				return nil
 			}
 			return &ExitError{Code: 1, Err: err}
@@ -513,7 +513,7 @@ func shufRunRange(ctx context.Context, inv *Invocation, writer *bufio.Writer, rn
 					return shufRandomExecutionError(inv, opts.randomSource, err)
 				}
 				if err := shufWriteUint64Record(writer, value, sep); err != nil {
-					if shufBrokenPipe(err) {
+					if BrokenPipe(err) {
 						return nil
 					}
 					return &ExitError{Code: 1, Err: err}
@@ -529,7 +529,7 @@ func shufRunRange(ctx context.Context, inv *Invocation, writer *bufio.Writer, rn
 				return shufRandomExecutionError(inv, opts.randomSource, err)
 			}
 			if err := shufWriteUint64Record(writer, value, sep); err != nil {
-				if shufBrokenPipe(err) {
+				if BrokenPipe(err) {
 					return nil
 				}
 				return &ExitError{Code: 1, Err: err}
@@ -559,7 +559,7 @@ func shufRunRange(ctx context.Context, inv *Invocation, writer *bufio.Writer, rn
 			return nil
 		}
 		if err := shufWriteUint64Record(writer, value, sep); err != nil {
-			if shufBrokenPipe(err) {
+			if BrokenPipe(err) {
 				return nil
 			}
 			return &ExitError{Code: 1, Err: err}
@@ -660,12 +660,6 @@ func shufRandomExecutionError(inv *Invocation, randomSource string, err error) e
 	return exitf(inv, 1, "shuf: %s: %v", quoteGNUOperand(randomSource), err)
 }
 
-func shufBrokenPipe(err error) bool {
-	if errors.Is(err, io.ErrClosedPipe) {
-		return true
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "broken pipe")
-}
 
 var _ Command = (*Shuf)(nil)
 var _ SpecProvider = (*Shuf)(nil)

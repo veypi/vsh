@@ -40,6 +40,7 @@ const (
 	OptionOptionalValue = pubcmd.OptionOptionalValue
 )
 
+var BrokenPipe = pubcmd.BrokenPipe
 var DefineCommand = pubcmd.DefineCommand
 var ExitCode = pubcmd.ExitCode
 var Exitf = pubcmd.Exitf

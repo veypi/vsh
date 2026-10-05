@@ -2,11 +2,8 @@ package builtins
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"strings"
-	"syscall"
 
 	"github.com/veypi/vsh/internal/printfutil"
 )
@@ -56,7 +53,7 @@ func (c *Printf) Run(ctx context.Context, inv *Invocation) error {
 		_, _ = fmt.Fprintf(stderr, "printf: %s\n", warning)
 	}
 	if _, err := io.WriteString(stdout, result.Output); err != nil {
-		if printfBrokenPipe(err) {
+		if BrokenPipe(err) {
 			if result.ExitCode != 0 {
 				return &ExitError{Code: int(result.ExitCode)}
 			}
@@ -73,13 +70,6 @@ func (c *Printf) Run(ctx context.Context, inv *Invocation) error {
 	return nil
 }
 
-func printfBrokenPipe(err error) bool {
-	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) {
-		return true
-	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "broken pipe") || strings.Contains(lower, "closed pipe")
-}
 
 func normalizeGNUPrintfArgs(args []string) (normalized []string, err error) {
 	if len(args) == 0 {

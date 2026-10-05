@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"syscall"
 )
 
 const teeBufferSize = 8 * 1024
@@ -335,7 +334,7 @@ func (w *teeMultiWriter) writeAndFlush(buf []byte) error {
 func (w *teeMultiWriter) handleWriteError(writer *teeWriter, err error) error {
 	switch mode := w.outputError; {
 	case mode == nil:
-		if teeIsBrokenPipe(err) {
+		if BrokenPipe(err) {
 			w.silentWriteFail = true
 			return errTeeAbortQuiet
 		}
@@ -347,7 +346,7 @@ func (w *teeMultiWriter) handleWriteError(writer *teeWriter, err error) error {
 		w.ignoredErrors++
 		return nil
 	case *mode == teeOutputErrorWarnNoPipe:
-		if !teeIsBrokenPipe(err) {
+		if !BrokenPipe(err) {
 			teeWriteWriterError(w.stderr, writer.name, err)
 			w.ignoredErrors++
 		}
@@ -356,7 +355,7 @@ func (w *teeMultiWriter) handleWriteError(writer *teeWriter, err error) error {
 		teeWriteWriterError(w.stderr, writer.name, err)
 		return errTeeAbort
 	case *mode == teeOutputErrorExitNoPipe:
-		if teeIsBrokenPipe(err) {
+		if BrokenPipe(err) {
 			return nil
 		}
 		teeWriteWriterError(w.stderr, writer.name, err)
@@ -412,9 +411,6 @@ func (r *teeInputReader) Read(buf []byte) (int, error) {
 	return n, err
 }
 
-func teeIsBrokenPipe(err error) bool {
-	return errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE)
-}
 
 func teeWriteOpenError(stderr io.Writer, name string, err error) error {
 	if stderr != nil {

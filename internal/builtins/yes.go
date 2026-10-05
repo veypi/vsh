@@ -3,10 +3,8 @@ package builtins
 import (
 	"bufio"
 	"context"
-	"errors"
 	"io"
 	"strings"
-	"syscall"
 )
 
 const yesBufferSize = 16 * 1024
@@ -68,13 +66,13 @@ func (c *Yes) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCom
 			return err
 		}
 		if _, err := writer.Write(buffer); err != nil {
-			if yesBrokenPipe(err) {
+			if BrokenPipe(err) {
 				return nil
 			}
 			return exitf(inv, 1, "yes: standard output: %v", err)
 		}
 		if err := writer.Flush(); err != nil {
-			if yesBrokenPipe(err) {
+			if BrokenPipe(err) {
 				return nil
 			}
 			return exitf(inv, 1, "yes: standard output: %v", err)
@@ -104,11 +102,6 @@ func prepareYesBuffer(buffer []byte) []byte {
 	return buffer
 }
 
-func yesBrokenPipe(err error) bool {
-	return errors.Is(err, io.ErrClosedPipe) ||
-		errors.Is(err, syscall.EPIPE) ||
-		strings.Contains(strings.ToLower(err.Error()), "broken pipe")
-}
 
 const yesHelpText = `Repeatedly display a line with STRING (or 'y')
 

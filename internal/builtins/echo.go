@@ -79,7 +79,7 @@ func (c *Echo) RunParsed(_ context.Context, inv *Invocation, matches *ParsedComm
 
 	stopped, err := writeEchoOutput(inv.Stdout, args, opts, echoUsesCLocale(inv))
 	if err != nil {
-		if printfBrokenPipe(err) {
+		if BrokenPipe(err) {
 			return nil
 		}
 		if diag, ok := shellWriteErrorDiagnostic("echo", err); ok {
@@ -91,7 +91,7 @@ func (c *Echo) RunParsed(_ context.Context, inv *Invocation, matches *ParsedComm
 		return nil
 	}
 	if _, err := io.WriteString(inv.Stdout, "\n"); err != nil {
-		if printfBrokenPipe(err) {
+		if BrokenPipe(err) {
 			return nil
 		}
 		if diag, ok := shellWriteErrorDiagnostic("echo", err); ok {
