@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/veypi/vsh/policy"
@@ -151,6 +152,23 @@ func ExitCode(err error) (int, bool) {
 		return 0, false
 	}
 	return exitErr.Code, true
+}
+
+// BrokenPipe reports whether err is a write failure caused by the downstream
+// consumer closing early (`cmd | head`), which real shells see as SIGPIPE.
+//
+// Commands writing to their own stdout must map it to an [ExitError] of code
+// 141 (128+SIGPIPE) instead of returning the raw error: the interpreter treats
+// an unwrapped error as fatal and aborts the whole script.
+func BrokenPipe(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "broken pipe") || strings.Contains(lower, "closed pipe")
 }
 
 // Diagnosticf builds an error whose message is intended for stderr output.

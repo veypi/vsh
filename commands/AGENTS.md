@@ -18,6 +18,7 @@ Defines the core command contract and invocation context.
 - `Invocation` — runtime context: `Args`, `Env`, `Cwd`, `Stdin`/`Stdout`/`Stderr`, `FS`, `Fetch`, `Exec`, `Interact`, `Limits`
 - `ExitError{Code, Err}` — error with exit code; use `ExitCode(err)` to extract
 - `Exitf(inv, code, format, args...)` — write to stderr and return an `ExitError`
+- `BrokenPipe(err)` — true when a write to the command's own stdout failed because the downstream consumer closed (`cmd | head`); map it to `ExitError{Code: 141}` instead of returning the raw error, which the interpreter treats as fatal
 
 ### command_spec.go
 Declarative metadata, parsing, and help/version rendering for commands.
