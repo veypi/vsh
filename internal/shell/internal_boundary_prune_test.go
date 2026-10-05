@@ -14,7 +14,9 @@ func TestNonInterpPackagesDoNotReferencePrunedInterpBoundary(t *testing.T) {
 	root := repoRoot(t)
 	roots := []string{
 		filepath.Join(root, "internal", "shell"),
-		filepath.Join(root, "internal", "runtime"),
+		// The former internal/runtime implementation now lives in the root vsh
+		// package; scan the root package files only (no subdirectories).
+		root,
 		filepath.Join(root, "examples"),
 	}
 	bannedSubstrings := []string{
@@ -39,6 +41,9 @@ func TestNonInterpPackagesDoNotReferencePrunedInterpBoundary(t *testing.T) {
 			}
 			if d.IsDir() {
 				if strings.HasPrefix(path, filepath.Join(root, "internal", "shell", "interp")) {
+					return filepath.SkipDir
+				}
+				if base == root && path != root {
 					return filepath.SkipDir
 				}
 				return nil

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/veypi/vsh/internal/conformance"
-	internalruntime "github.com/veypi/vsh/internal/runtime"
+	"github.com/veypi/vsh"
 	"github.com/veypi/vsh/internal/testutil"
 )
 
@@ -88,7 +88,7 @@ func newJQConformanceSuiteConfig(tb testing.TB, opts jqConformanceOptions) confo
 		SpecDir:      opts.specDir,
 		ManifestPath: opts.manifestPath,
 		OracleMode:   conformance.OracleBash,
-		GBashConfig: &internalruntime.Config{
+		GBashConfig: &vsh.Config{
 			Registry: newJQRegistry(tb),
 		},
 	}

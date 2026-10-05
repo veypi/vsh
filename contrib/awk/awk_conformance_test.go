@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/veypi/vsh/internal/conformance"
-	internalruntime "github.com/veypi/vsh/internal/runtime"
+	"github.com/veypi/vsh"
 	"github.com/veypi/vsh/internal/testutil"
 )
 
@@ -88,7 +88,7 @@ func newAWKConformanceSuiteConfig(tb testing.TB, opts awkConformanceOptions) con
 		SpecDir:      opts.specDir,
 		ManifestPath: opts.manifestPath,
 		OracleMode:   conformance.OracleBash,
-		GBashConfig: &internalruntime.Config{
+		GBashConfig: &vsh.Config{
 			Registry: newAWKRegistry(tb),
 		},
 	}

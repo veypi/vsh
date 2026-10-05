@@ -24,7 +24,7 @@ import (
 	"github.com/veypi/vsh/commands"
 	gbfs "github.com/veypi/vsh/fs"
 	"github.com/veypi/vsh/internal/builtins"
-	gbruntime "github.com/veypi/vsh/internal/runtime"
+	"github.com/veypi/vsh"
 	"github.com/veypi/vsh/internal/testutil"
 	"github.com/veypi/vsh/policy"
 	"github.com/veypi/vsh/shell/syntax"
@@ -394,22 +394,22 @@ func runGBash(ctx context.Context, cfg *SuiteConfig, oraclePath, specPath, works
 		cfg = &SuiteConfig{}
 	}
 	env := vshEnv(cfg, specPath)
-	opts := make([]gbruntime.Option, 0, 4)
+	opts := make([]vsh.Option, 0, 4)
 	if cfg.GBashConfig != nil {
-		opts = append(opts, gbruntime.WithConfig(cfg.GBashConfig))
+		opts = append(opts, vsh.WithConfig(cfg.GBashConfig))
 	}
 	if useScopedGlobWorkspace(specPath) {
-		opts = append(opts, gbruntime.WithBaseEnv(env))
+		opts = append(opts, vsh.WithBaseEnv(env))
 	}
 	opts = append(opts,
-		gbruntime.WithFileSystem(virtualWorkspaceFileSystem(specPath, workspace, vshWorkspaceRoot(specPath))),
-		gbruntime.WithRegistry(vshRegistry(cfg)),
+		vsh.WithFileSystem(virtualWorkspaceFileSystem(specPath, workspace, vshWorkspaceRoot(specPath))),
+		vsh.WithRegistry(vshRegistry(cfg)),
 	)
 	if cfg := vshPolicyConfig(specPath); cfg != nil {
-		opts = append(opts, gbruntime.WithPolicy(policy.NewStatic(cfg)))
+		opts = append(opts, vsh.WithPolicy(policy.NewStatic(cfg)))
 	}
-	//nolint:contextcheck // gbruntime.New does not accept context; the created runtime is only used inside this ctx-scoped run.
-	rt, err := gbruntime.New(opts...)
+	//nolint:contextcheck // vsh.New does not accept context; the created runtime is only used inside this ctx-scoped run.
+	rt, err := vsh.New(opts...)
 	if err != nil {
 		return ExecutionResult{}, err
 	}
@@ -417,7 +417,7 @@ func runGBash(ctx context.Context, cfg *SuiteConfig, oraclePath, specPath, works
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	result, err := session.Exec(ctx, &gbruntime.ExecutionRequest{
+	result, err := session.Exec(ctx, &vsh.ExecutionRequest{
 		Interpreter:  vshInterpreter(cfg.OracleMode),
 		ShellVariant: vshShellVariant(cfg.OracleMode),
 		Script:       script,
@@ -447,8 +447,8 @@ func runGBash(ctx context.Context, cfg *SuiteConfig, oraclePath, specPath, works
 	}, nil
 }
 
-func virtualWorkspaceFileSystem(specPath, workspace, sandboxRoot string) gbruntime.FileSystemConfig {
-	return gbruntime.CustomFileSystem(gbfs.FactoryFunc(func(ctx context.Context) (gbfs.FileSystem, error) {
+func virtualWorkspaceFileSystem(specPath, workspace, sandboxRoot string) vsh.FileSystemConfig {
+	return vsh.CustomFileSystem(gbfs.FactoryFunc(func(ctx context.Context) (gbfs.FileSystem, error) {
 		fsys, err := loadWorkspaceIntoMemory(ctx, workspace, sandboxRoot)
 		if err != nil {
 			return nil, err

@@ -3,7 +3,7 @@ package conformance
 import (
 	"strings"
 
-	gbruntime "github.com/veypi/vsh/internal/runtime"
+	"github.com/veypi/vsh"
 )
 
 type SpecFile struct {
@@ -86,7 +86,7 @@ type SuiteConfig struct {
 	OracleMode    OracleMode
 	Env           map[string]string
 	ExtraBinaries map[string]string
-	GBashConfig   *gbruntime.Config
+	GBashConfig   *vsh.Config
 }
 
 type ExecutionResult struct {

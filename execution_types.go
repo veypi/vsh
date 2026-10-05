@@ -2,9 +2,10 @@ package vsh
 
 import (
 	"io"
+	"maps"
 	"time"
 
-	internalruntime "github.com/veypi/vsh/internal/runtime"
+	"github.com/veypi/vsh/commands"
 	"github.com/veypi/vsh/trace"
 )
 
@@ -31,6 +32,14 @@ type ExecutionRequest struct {
 	Stdin           io.Reader
 	Stdout          io.Writer
 	Stderr          io.Writer
+
+	// Private execution parameters used by nested shell execution
+	// (commands.ExecutionRequest callbacks). They are not part of the public
+	// request surface.
+	command     []string
+	argv0       *string
+	searchEnv   map[string]string
+	startupHome string
 }
 
 // ExecutionResult captures the output, exit status, timing, and optional trace
@@ -50,6 +59,10 @@ type ExecutionResult struct {
 	Events          []trace.Event
 	StdoutTruncated bool
 	StderrTruncated bool
+
+	// commandNotFound records a command-resolution miss for nested execution
+	// callbacks (commands.ExecutionResult).
+	commandNotFound bool
 }
 
 // InteractiveRequest describes an interactive shell session.
@@ -71,11 +84,11 @@ type InteractiveResult struct {
 	ExitCode int
 }
 
-func (req *ExecutionRequest) runtimeRequest() *internalruntime.ExecutionRequest {
+func executionRequestFromCommand(req *commands.ExecutionRequest) *ExecutionRequest {
 	if req == nil {
-		return &internalruntime.ExecutionRequest{}
+		return &ExecutionRequest{}
 	}
-	return &internalruntime.ExecutionRequest{
+	return &ExecutionRequest{
 		Name:            req.Name,
 		Interpreter:     req.Interpreter,
 		ShellVariant:    req.ShellVariant,
@@ -92,19 +105,23 @@ func (req *ExecutionRequest) runtimeRequest() *internalruntime.ExecutionRequest 
 		Stdin:           req.Stdin,
 		Stdout:          req.Stdout,
 		Stderr:          req.Stderr,
+		command:         cloneStrings(req.Command),
+		argv0:           req.Argv0,
+		searchEnv:       copyStringMap(req.SearchEnv),
 	}
 }
 
-func executionResultFromRuntime(result *internalruntime.ExecutionResult) *ExecutionResult {
+func (result *ExecutionResult) commandResult() *commands.ExecutionResult {
 	if result == nil {
 		return nil
 	}
-	return &ExecutionResult{
+	return &commands.ExecutionResult{
 		ExitCode:        result.ExitCode,
 		ShellExited:     result.ShellExited,
 		Stdout:          result.Stdout,
 		Stderr:          result.Stderr,
 		ControlStderr:   result.ControlStderr,
+		CommandNotFound: result.commandNotFound,
 		FinalEnv:        copyStringMap(result.FinalEnv),
 		StartedAt:       result.StartedAt,
 		FinishedAt:      result.FinishedAt,
@@ -115,11 +132,11 @@ func executionResultFromRuntime(result *internalruntime.ExecutionResult) *Execut
 	}
 }
 
-func (req *InteractiveRequest) runtimeRequest() *internalruntime.InteractiveRequest {
+func interactiveRequestFromCommand(req *commands.InteractiveRequest) *InteractiveRequest {
 	if req == nil {
-		return &internalruntime.InteractiveRequest{}
+		return &InteractiveRequest{}
 	}
-	return &internalruntime.InteractiveRequest{
+	return &InteractiveRequest{
 		Name:           req.Name,
 		ShellVariant:   req.ShellVariant,
 		Args:           cloneStrings(req.Args),
@@ -133,11 +150,20 @@ func (req *InteractiveRequest) runtimeRequest() *internalruntime.InteractiveRequ
 	}
 }
 
-func interactiveResultFromRuntime(result *internalruntime.InteractiveResult) *InteractiveResult {
+func (result *InteractiveResult) commandResult() *commands.InteractiveResult {
 	if result == nil {
 		return nil
 	}
-	return &InteractiveResult{ExitCode: result.ExitCode}
+	return &commands.InteractiveResult{ExitCode: result.ExitCode}
+}
+
+func copyStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(src))
+	maps.Copy(out, src)
+	return out
 }
 
 func cloneStrings(src []string) []string {

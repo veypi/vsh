@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	gbruntime "github.com/veypi/vsh/internal/runtime"
+	"github.com/veypi/vsh"
 	"github.com/veypi/vsh/internal/testutil"
 	"github.com/veypi/vsh/network"
 )
@@ -33,7 +33,7 @@ func newCurlSuiteConfig(t *testing.T) SuiteConfig {
 		ExtraBinaries: map[string]string{
 			"curl": curlPath,
 		},
-		GBashConfig: &gbruntime.Config{
+		GBashConfig: &vsh.Config{
 			Network: &network.Config{
 				AllowedURLPrefixes: []string{baseURL + "/"},
 				AllowedMethods: []network.Method{
