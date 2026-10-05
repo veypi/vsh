@@ -58,6 +58,12 @@ func (r *Runner) unTestOwnOrGrp(ctx context.Context, op syntax.UnTestOperator, x
 }
 
 func fileHasPermission(info fs.FileInfo, currentUID, currentGID int, mask fs.FileMode) bool {
+	// POSIX：root 绕过权限位检查（与 OS 真实行为一致——进程 euid=0 时
+	// cd/test -rwx 不看位）。虚拟身份与真实身份对齐后（host 注入真实
+	// UID），root 设备少了这条旁路会出现「真实可进、虚拟拒绝」。
+	if currentUID == 0 {
+		return true
+	}
 	mode := info.Mode().Perm()
 	ownerUID, ownerGID, ok := fileOwnerIDs(info)
 	if !ok {
