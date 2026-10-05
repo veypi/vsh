@@ -50,7 +50,7 @@ git cherry-pick <sha>   # 冲突点预期集中在改名面，逐文件处理
 
 ## 集成边界
 
-pod/cloud 的共享集成是 aic-pod/libs/execution：管理执行句柄、等待和 bg，并仅注册本端可用的平台命令。host 在已解析文件出口做 exec_rules 判定后交 vbox；cloud 不注入 NativeExec。service 生命周期属于 skillrun，不占 bg 配额。
+pod/cloud 的共享集成是 aic-pod/libs/execution：管理执行句柄、等待和 bg，并仅注册本端可用的平台命令。host 在已解析文件出口做 exec_rules 判定后交 vbox；cloud 不注入 NativeExec。
 
 Windows 的 PATH 在 host 环境入口转换为冒号分隔的 /c/... 形态；程序路径、cwd 和路径环境变量在 OS 出口统一还原。vsh 不解析原生分号 PATH。
 

@@ -61,9 +61,9 @@ func (r *Registry) Register(cmd Command) error {
 }
 
 // RegisterGuarded stores cmd by name but fails with an explicit error when the
-// name is already taken. Skill-package lifecycle code (aic-pod skillrun) uses
-// this to enforce that root commands never silently shadow builtins or other
-// packages——禁用/卸载语义的地基（2026-10-01）。
+// name is already taken. Embedders that compose command sets from multiple
+// sources (如 aic-pod/libs/execution 注册平台命令）用它强制 root 命令不静默
+// 覆盖内建或其他包。
 func (r *Registry) RegisterGuarded(cmd Command) error {
 	if cmd == nil {
 		return nil
@@ -78,19 +78,6 @@ func (r *Registry) RegisterGuarded(cmd Command) error {
 	}
 	r.commands[name] = cmd
 	return nil
-}
-
-// Unregister removes the command bound to name（不存在 = false，幂等）。
-// 在途调用持有的是 Command 实例引用，解注册只影响后续 Lookup。
-func (r *Registry) Unregister(name string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, exists := r.commands[name]; !exists {
-		return false
-	}
-	delete(r.commands, name)
-	return true
 }
 
 // RegisterLazy registers a name that will be materialized by loader on first

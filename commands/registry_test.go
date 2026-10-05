@@ -102,19 +102,3 @@ func TestRegisterGuardedRejectsDuplicate(t *testing.T) {
 	}
 }
 
-func TestUnregister(t *testing.T) {
-	registry := NewRegistry()
-	if registry.Unregister("ghost") {
-		t.Fatal("Unregister(absent) = true, want false")
-	}
-	_ = registry.Register(DefineCommand("pkg", nil))
-	if !registry.Unregister("pkg") {
-		t.Fatal("Unregister(present) = false, want true")
-	}
-	if _, ok := registry.Lookup("pkg"); ok {
-		t.Fatal("Lookup after Unregister must miss")
-	}
-	if registry.Unregister("pkg") {
-		t.Fatal("Unregister must be idempotent (second call = false)")
-	}
-}

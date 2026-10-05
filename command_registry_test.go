@@ -36,10 +36,6 @@ type -P probe || true`)
 			t.Fatalf("unexpected generated path %s: %v", p, err)
 		}
 	}
-	registry.Unregister("probe")
-	if result := mustExecSession(t, session, "probe"); result.ExitCode != 127 {
-		t.Fatalf("removed=%+v", result)
-	}
 }
 
 func TestCustomFactoryHasNoLayoutSideEffects(t *testing.T) {

@@ -29,7 +29,7 @@
 
 ### 1.3 M1 强制核实项（v4.1）
 - [x] 1.3.1 **Windows PATH 分隔符**：layout.go `commandDirectoriesForPath` 按 `:` 切分——结论：fork 不改切分逻辑，约束落 glue（fs_host 必须呈现 unix 风格虚拟路径，与 2.3.3 对齐）；设备级实证随 M2 win 冒烟（结论记 FORK.md）
-- [x] 1.3.2 **内建 --help 覆盖度**：130 内建逐一 `--help`，缺失的 fork 补齐（D7）（实测 20 缺口已全部补齐；internal/runtime/help_coverage_test.go 常驻防回归）
+- [x] 1.3.2 **内建 --help 覆盖度**：130 内建逐一 `--help`，缺失的 fork 补齐（D7）（实测 20 缺口已全部补齐；help_coverage_test.go（根包） 常驻防回归）
 - [x] 1.3.3 **内建 ls/rg 基础行为**：确认脚本命令角色下的行为与 help 文本（fs 的结构化 ls/rg 双轨独立，不涉引擎）（内建测试全绿 + --help 覆盖测试保证；rg oracle 用 homebrew rg 15.1.0 通过）
 - [x] 1.3.4 **jq 挂入验证**：contrib/jq 在 fork 内可构建可注册（cloud/host registry 各一行 Register 的接法在 M2 cmds.go 定型）（构建绿 + Register(registry) API 确认；1 个上游既有环境性测试失败，非 fork 引入，记 FORK.md）
 
