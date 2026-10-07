@@ -14,11 +14,13 @@ func TestDocsDoNotReferenceRemovedShellSeams(t *testing.T) {
 	root := repoRoot(t)
 	paths := []string{
 		"README.md",
+		"README.en.md",
+		"AGENTS.md",
 		"SPEC.md",
 		"THREAT_MODEL.md",
 		"api.go",
 	}
-	// vsh fork: website/ is pruned from the fork; walk it only when present.
+	// website/ is pruned from this repository; walk it only when present.
 	if _, statErr := os.Stat(filepath.Join(root, "website", "content")); statErr == nil {
 		if err := filepath.WalkDir(filepath.Join(root, "website", "content"), func(path string, d os.DirEntry, err error) error {
 			if err != nil {

@@ -1,5 +1,7 @@
 # Security Policy
 
+支持面：darwin / linux / windows（见 [README](README.md)「平台支持」）；威胁模型与边界见 [THREAT_MODEL.md](THREAT_MODEL.md)。
+
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability in vsh, please report it through

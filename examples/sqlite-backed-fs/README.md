@@ -24,14 +24,16 @@ From the `examples/` module, you can also use the bundled Make target:
 
 ```bash
 cd examples
-make run-sqlite-backed-fs SQLITE_FS_DB=/tmp/vsh-sandbox.db SQLITE_FS_SCRIPT="printf 'hello from sqlite fs\n' > /tmp/hello.txt"
+GOWORK=off go run ./sqlite-backed-fs \
+  --db /tmp/vsh-sandbox.db \
+  --script "printf 'hello from sqlite fs\n' > /tmp/hello.txt"
 ```
 
 For the interactive mode:
 
 ```bash
 cd examples
-make run-sqlite-backed-fs-repl SQLITE_FS_DB=/tmp/vsh-sandbox.db
+GOWORK=off go run ./sqlite-backed-fs --db /tmp/vsh-sandbox.db --repl
 ```
 
 Then run a second script against the same backing database:

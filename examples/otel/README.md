@@ -29,7 +29,7 @@ From the `examples/` module:
 
 ```bash
 cd examples
-make run-otel
+GOWORK=off go run ./otel
 ```
 
 ## Mapping Notes

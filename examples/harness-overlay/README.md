@@ -12,7 +12,8 @@ From the repository root:
 
 ```bash
 export OPENAI_API_KEY=your-api-key
-make -C examples run-harness-overlay
+cd examples
+GOWORK=off go run ./harness-overlay
 ```
 
 Run a one-shot shell snippet inside the prepared harness workspace:

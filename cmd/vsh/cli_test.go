@@ -2620,7 +2620,7 @@ func TestRunCLIHostUtilityPwdHonorsLogicalAndPhysicalModes(t *testing.T) {
 
 type hostUtilityOpts struct {
 	cwd            string // defaults to root when empty
-	vshUmask     string
+	vshUmask       string
 	posixlyCorrect string
 	inheritEnv     []string
 }

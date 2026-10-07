@@ -1,8 +1,9 @@
 # vsh
 
-Status: 公开版架构契约，2026-10-03（其余语言能力沿用 fork 基线）。
+Status: 公开版架构契约，2026-10-07。
+平台支持：darwin / linux / windows（支持面与其余平台的处理见 README 「平台支持」）。
 
-> 命令解析、FS 初始化和 NativeExec 以本文当前契约为准；fork 来源见 [FORK.md](FORK.md)。
+> 命令解析、FS 初始化和 NativeExec 以本文当前契约为准；来源与署名见 [README](README.md) 文末。
 > NativeExec 由 embedder 显式注入，默认关闭；未知名字永不直接交给宿主 OS。
 
 ## 1. Purpose
@@ -284,7 +285,7 @@ That metadata now has a supported public adapter boundary. `vsh.Config.Host` and
 
 Signal identity is part of that runtime-owned metadata. Stable `$$` values, per-shell `BASHPID`, shell-family `PPID`, virtual background job IDs, and internal signal delivery for shell-managed `kill` targets must be derived from runner state rather than host PIDs.
 
-## 7. Proposed Package Layout
+## 7. Package Layout
 
 ```text
 host/                  public host adapter boundary for platform/process behavior
@@ -299,13 +300,14 @@ internal/shell/        project-owned shell core and internal interpreter integra
 fs/                   project-owned filesystem interfaces and virtual backends
 network/              sandboxed HTTP client, allowlist matching, redirect checks
 commands/             command registry, invocation context, core Go commands
-contrib/<name>/       separate Go modules for optional heavyweight commands and public helpers
-packages/<name>/      publishable JavaScript/TypeScript packages
+contrib/<name>/       separate Go modules for optional commands
 policy/               sandbox policy types and enforcement decisions
 trace/                structured event model and recorder implementations
 examples/             separate Go module for SDK demos and integration examples
-tests/                integration fixtures and compatibility-style harnesses
+internal/conformance/ vendored shell/curl conformance corpus and harness
 ```
+
+（上游的 `packages/`（JS/TS 包与 `@ewhauser/vsh-wasm`）与 `tests/` 目录不在本仓：js/wasm 只保证库本体可编译；一致性测试位于 `internal/conformance/`。）
 
 Package responsibilities:
 
@@ -320,26 +322,26 @@ Package responsibilities:
 - `fs/`: POSIX-like path normalization, memory filesystem, host-backed lower layers, overlay, and snapshot backends
 - `network/`: runtime-owned HTTP sandbox with origin- and path-boundary-aware allowlists, method controls, redirect revalidation, and response-size limits
 - `commands/`: registry and Go-native command implementations such as `clear`, `compadjust`, `complete`, `compgen`, `compopt`, `echo`, `egrep`, `fgrep`, `grep`, `history`, `ls`, `mkfifo`, `pwd`, `rg`, `strings`, and `xan`
-- `contrib/`: opt-in command modules and public helper packages that stay outside the root module dependency graph so heavyweight helpers do not inflate the core runtime. The repository may also expose umbrella contrib helpers such as `contrib/extras` to register the stable official contrib command set without changing the default runtime surface, may ship reusable tool/helper packages such as `contrib/bashtool` and `contrib/codingtools`, and may ship official opt-in binaries such as `contrib/extras/cmd/vsh-extras` from the corresponding contrib module. Current command examples include `awk`, `html-to-markdown`, `jq`, `nodejs`, `python`, `sqlite3`, and `yq`.
-- `packages/`: publishable JavaScript and TypeScript packages. `packages/vsh-wasm` owns the `js/wasm` assets plus explicit host entrypoints such as `@ewhauser/vsh-wasm/browser` and `@ewhauser/vsh-wasm/node`.
+- `contrib/`: opt-in command modules that stay outside the root module dependency graph so heavyweight helpers do not inflate the core runtime. The repository may also expose umbrella contrib helpers such as `contrib/extras` to register the stable official contrib command set without changing the default runtime surface, and may ship official opt-in binaries such as `contrib/extras/cmd/vsh-extras` from the corresponding contrib module. Current command examples include `awk`, `html-to-markdown`, `jq`, `nodejs`, `sqlite3`, and `yq`. Each contrib module carries its own version and tag (`contrib/<name>/vX.Y.Z`); the root module never imports them.
 - `policy/`: allowlists, root restrictions, size limits, network stance, and decision helpers
 - `trace/`: event schema, recorder interfaces, and in-memory buffering
-- `examples/`: runnable demos that can depend on external SDKs without affecting the root module build list. The repository may also ship official maintained examples such as `examples/vsh-eval`; any evaluator-only commands or affordances used there, including scripted-tool discovery/help shims, remain local to the example and do not expand the core runtime contract.
-- `tests/`: black-box runtime tests and corpus-driven shell fixtures
+- `examples/`: runnable demos that can depend on external SDKs without affecting the root module build list. Example-specific helpers stay scoped to that example module rather than silently becoming supported runtime surface.
+
+（一致性测试（黑盒运行时/语料驱动）位于 `internal/conformance/`，不另设 `tests/` 目录。）
 
 We intentionally do not create a `compat/` package because external harness support should ride on the normal CLI and runtime surfaces, not a second execution API.
 
-The repository itself should be maintained as a committed Go workspace plus a pnpm workspace. The root module stays focused on the runtime, CLI, and core commands, while direct children under `contrib/` are separate modules for optional heavyweight commands and public helper packages, `packages/` contains publishable JavaScript packages, and `examples/` is a separate module used for demos that may need external SDK dependencies or looser version pinning. Official examples can include repo-maintained evaluation harnesses or SDK integrations, but any example-specific helpers stay scoped to that example module rather than silently becoming supported runtime surface.
+The repository keeps a single committed Go module at the root plus independent modules under `contrib/` and `examples/`（无 pnpm/JS 工作区，上游的 packages/、website/ 已剪枝）。The root module stays focused on the runtime, CLI, and core commands, while direct children under `contrib/` are separate modules for optional heavyweight commands, and `examples/` is a separate module used for demos that may need external SDK dependencies or looser version pinning. Example-specific helpers stay scoped to that example module rather than silently becoming supported runtime surface.
 
-Top-level repository directories such as `cmd/`, `contrib/`, `packages/`,
-`scripts/`, and `third_party/` may also carry doc-only package comments so
-pkg.go.dev can render repository layout pages and directory synopses. Those
-overview packages are for navigation and documentation only; supported Go APIs
-remain the concrete runtime packages and documented nested modules.
+Top-level repository directories such as `cmd/`, `contrib/`, and `examples/`
+may also carry doc-only package comments so pkg.go.dev can render repository
+layout pages and directory synopses. Those overview packages are for navigation
+and documentation only; supported Go APIs remain the concrete runtime packages
+and documented nested modules.
 
 Optional language runtimes in `contrib/` must preserve the same sandbox contract as core commands. The current `contrib/nodejs` design is experimental and intentionally excluded from `contrib/extras` until its surface stabilizes. It uses `goja` plus a curated `goja_nodejs` allowlist, with vsh-owned replacements for host-sensitive modules such as `process`, `console`, `fs`, and `path`. It does not expose host subprocesses, host filesystem access, or unrestricted network APIs, and any supported file access must flow through `Invocation.FS`.
 
-The stable contrib bundle also includes `contrib/python`, which registers both `python` and `python3` via `gomonty`. That command remains outside `vsh.DefaultRegistry()`, but when it is explicitly registered or pulled in through `contrib/extras`, filesystem access must continue to flow through `Invocation.FS`, environment access through `Invocation.Env`, and execution must remain sandbox-local without host subprocess escape hatches. With the pinned `gomonty`/Monty runtime, builtin `print(...)` output must be forwarded to vsh stdout, while upstream Monty still treats `print(..., file=...)` as unsupported. Invoking `python` or `python3` with no arguments on a tty should start an in-process Monty REPL; the same zero-argument form on non-tty stdin should continue to execute the full stdin stream as a script. When interactive commands need terminal reopening semantics, they must do so through a runtime-owned sandbox `/dev/tty` endpoint rather than by receiving raw host tty handles in `Invocation`.
+The former `contrib/python` module — which registered `python`/`python3` through `gomonty` and a bundled native Monty runtime — was removed in 0.2.0: `vsh` no longer depends on any upstream `github.com/ewhauser/*` module. Embedders that need Python inside the sandbox should wire an official runtime through the embedding surface instead of relying on a bundled interpreter.
 
 The opt-in `contrib/awk` module must preserve the same sandbox boundary while matching GNU awk behavior inside that boundary. Its GNU-style source loading (`-f`, `-e`, `-E`, `-i`), `getline`/redirection file access, and `system()` plus pipe operators must all route through runtime-owned capabilities: file reads and writes through `Invocation.FS`, and shell execution through nested `Invocation.Exec` requests using `sh` semantics in the same session, cwd, environment, and policy context. The contrib awk adapter and its vendored interpreter fork may expose hook points for sandbox-owned file writers and shell runners, but they must not bypass the runtime by calling host `os.OpenFile`, `exec.Command`, or equivalent host-global process APIs directly for awk program I/O or command execution.
 
@@ -768,7 +770,7 @@ Backend boundary for the current implementation:
 - `SnapshotFS` is a read-only backend for deterministic fixtures and direct tests
 - `SnapshotFS` is not the default `runtime` session backend because the default runtime requires a mutable filesystem for ordinary shell writes
 - the common host-project workflow should be represented as a high-level runtime helper that mounts a read-only host tree under an in-memory overlay and starts the session in that mounted directory
-- the `@ewhauser/vsh-wasm` bridge should expose the same seeded-memory model for `files`, including lazy per-path providers, rather than eagerly writing every file after session creation
+- 最早基线的 `@ewhauser/vsh-wasm` 桥接（随机内存模型的 JS 入口）不在本仓；js/wasm 目标只保证库本体可编译。
 
 ## 12. Policy Model
 

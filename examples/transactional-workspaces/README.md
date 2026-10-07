@@ -39,7 +39,7 @@ From the `examples/` module, you can also use:
 
 ```bash
 cd examples
-make run-transactional-workspaces
+GOWORK=off go run ./transactional-workspaces
 ```
 
 ## What It Demonstrates

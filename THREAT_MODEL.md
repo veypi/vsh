@@ -1,11 +1,16 @@
 # vsh Threat Model
 
+本文件继承自本仓早期基线（Apache-2.0 代码库 gbash，署名见 [NOTICE](NOTICE)），
+2026-10-07 按现状复核：
+上游的 website/、packages/（JS 包与 WASM 发行）与 `cmd/vsh-gnu` 之外的上游工具链已剪枝；
+平台支持面为 darwin / linux / windows（其余平台不承诺行为，见 [README](README.md)）。
+
 ## Executive summary
 For the validated context of local or embedded single-tenant use, `vsh`'s highest-risk areas are the boundaries where untrusted shell text meets host-backed filesystems, optional network egress, and caller-controlled observability sinks. The core runtime does a number of important things correctly by default, including registry-backed command resolution, in-memory filesystem defaults, network-off-by-default behavior, path-policy enforcement, and execution budgets, but the security posture changes materially when an embedder opts into `WithWorkspace`, `ReadWriteDirectoryFileSystem`, `WithHTTPAccess` or `WithNetwork`, `TraceRaw`, or server mode.
 
 ## Scope and assumptions
 - In-scope paths: `cmd/vsh/`, `cli/`, `api.go`, `options.go`, `runtime.go`, `session.go`, `internal/shell/`, `internal/builtins/`, `commands/`, `policy/`, `fs/`, `network/`, `server/`.
-- Out-of-scope: CI and release automation, benchmarks, website build and docs, `cmd/vsh-gnu`, optional `contrib/` modules not registered by default, and package publishing/WASM distribution. Those surfaces may matter operationally, but this report is intentionally centered on runtime and sandbox behavior.
+- Out-of-scope: CI and release automation, benchmarks, docs, `cmd/vsh-gnu`, optional `contrib/` modules not registered by default. Those surfaces may matter operationally, but this report is intentionally centered on runtime and sandbox behavior.
 - Clarified context: primary deployment is local or embedded single-tenant use, not a multi-tenant internet-facing service.
 - Clarified context: host-mounted repositories, environment variables, and tokens are high-sensitivity assets when exposed to the runtime.
 - Assumption: the default deployment remains the documented one where unknown commands never fall through to host execution, network stays off unless explicitly enabled, and the default runtime starts with an in-memory filesystem.

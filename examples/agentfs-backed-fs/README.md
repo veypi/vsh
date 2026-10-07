@@ -28,8 +28,12 @@ From the `examples/` module, you can also use the bundled Make target:
 
 ```bash
 cd examples
-make run-agentfs-backed-fs AGENTFS_FS_DB=/tmp/vsh-agentfs.db AGENTFS_FS_SCRIPT="printf 'hello from agentfs\n' > /tmp/hello.txt"
+GOWORK=off go run ./agentfs-backed-fs \
+  --db /tmp/vsh-agentfs.db \
+  --script "printf 'hello from agentfs\n' > /tmp/hello.txt"
 ```
+
+（`GOWORK=off` 只在本仓被嵌进外层 Go workspace 时需要；单独 clone 本仓则不需要。）
 
 Then run a second script against the same backing database:
 

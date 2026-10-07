@@ -22,7 +22,7 @@ From the `examples/` module:
 
 ```bash
 cd examples
-make run-oauth-network-extension
+GOWORK=off go run ./oauth-network-extension
 ```
 
 ## What It Demonstrates
