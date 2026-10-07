@@ -1,4 +1,4 @@
-//go:build !windows && !js
+//go:build !windows && !js && !wasip1
 
 package fs
 
@@ -544,5 +544,5 @@ func (e fileTooLargeError) Error() string {
 }
 
 func (e fileTooLargeError) Unwrap() error {
-	return syscall.EFBIG
+	return errnoFileTooLarge
 }

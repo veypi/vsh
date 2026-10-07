@@ -660,7 +660,6 @@ func shufRandomExecutionError(inv *Invocation, randomSource string, err error) e
 	return exitf(inv, 1, "shuf: %s: %v", quoteGNUOperand(randomSource), err)
 }
 
-
 var _ Command = (*Shuf)(nil)
 var _ SpecProvider = (*Shuf)(nil)
 var _ ParsedRunner = (*Shuf)(nil)

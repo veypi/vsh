@@ -1,4 +1,4 @@
-//go:build !windows && !js
+//go:build !windows && !js && !wasip1 && !plan9
 
 package fs
 

@@ -3298,7 +3298,6 @@ func (r *Runner) optStatusText(status bool) string {
 	return "off"
 }
 
-
 func (r *Runner) lookupPrintfEnv(name string) (string, bool) {
 	vr := r.lookupVar(name)
 	if !vr.IsSet() || !vr.Exported || vr.Kind != expand.String {

@@ -1,4 +1,4 @@
-//go:build !windows && !js
+//go:build !windows && !js && !wasip1
 
 package fs
 
@@ -15,8 +15,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // ReadWriteFS exposes a mutable host directory as the sandbox root.
@@ -305,11 +303,7 @@ func (h *ReadWriteFS) Lchtimes(_ context.Context, name string, atime, mtime time
 	}
 	defer func() { _ = parent.Close() }()
 
-	times := []unix.Timespec{
-		unix.NsecToTimespec(atime.UnixNano()),
-		unix.NsecToTimespec(mtime.UnixNano()),
-	}
-	if err := unix.UtimesNanoAt(int(parent.Fd()), base, times, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+	if err := lchtimesAt(parent, base, atime, mtime); err != nil {
 		return h.pathError("lchtimes", abs, err)
 	}
 	return nil

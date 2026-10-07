@@ -729,7 +729,6 @@ func seqFindDirective(format string) (start, end int, err error) {
 	return directiveStart, directiveEnd, nil
 }
 
-
 func seqWriteError(inv *Invocation, err error) error {
 	if BrokenPipe(err) {
 		return nil

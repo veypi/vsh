@@ -9,9 +9,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/veypi/vsh"
 	"github.com/veypi/vsh/commands"
-	"github.com/klauspost/compress/zstd"
 )
 
 func main() {

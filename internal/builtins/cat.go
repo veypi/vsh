@@ -506,7 +506,6 @@ func catWriteExitError(err error) error {
 	return &ExitError{Code: 1, Err: err}
 }
 
-
 func writeCatNewLine(w io.Writer, opts catOptions, state *catOutputState) error {
 	if state == nil {
 		return nil

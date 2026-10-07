@@ -70,7 +70,6 @@ func (c *Printf) Run(ctx context.Context, inv *Invocation) error {
 	return nil
 }
 
-
 func normalizeGNUPrintfArgs(args []string) (normalized []string, err error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("missing operand")

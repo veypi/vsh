@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	gbfs "github.com/veypi/vsh/fs"
 	gosqlite "github.com/ncruces/go-sqlite3"
 	_ "github.com/ncruces/go-sqlite3/embed"
+	gbfs "github.com/veypi/vsh/fs"
 )
 
 const (

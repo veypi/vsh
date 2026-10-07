@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -66,7 +65,7 @@ func outputWithETXTBSYRetry(run func() ([]byte, error)) ([]byte, error) {
 	)
 	for attempt := range maxAttempts {
 		out, err = run()
-		if err == nil || !errors.Is(err, syscall.ETXTBSY) {
+		if err == nil || !errors.Is(err, errTextBusy) {
 			return out, err
 		}
 		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)

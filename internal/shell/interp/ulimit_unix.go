@@ -15,9 +15,9 @@ func ulimitBuiltinLines(mode ulimitBuiltinMode) []string {
 		if err := syscall.Getrlimit(spec.resource, &limit); err != nil {
 			continue
 		}
-		value := limit.Cur
+		value := uint64(limit.Cur)
 		if mode == ulimitBuiltinHard {
-			value = limit.Max
+			value = uint64(limit.Max)
 		}
 		lines = append(lines, fmt.Sprintf("%-25s (%s, -%c) %s", spec.label, spec.unit, spec.option, formatUlimitValue(value, spec.scale)))
 	}

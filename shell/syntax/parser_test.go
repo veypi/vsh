@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/veypi/vsh/internal/testutil"
 	"github.com/go-quicktest/qt"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/veypi/vsh/internal/testutil"
 )
 
 func TestParserBacktrackSnapshotClonesScratch(t *testing.T) {

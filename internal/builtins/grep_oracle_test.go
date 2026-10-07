@@ -22,7 +22,7 @@ type grepOracleResult struct {
 
 func TestGrepMatchesRipgrep(t *testing.T) {
 	t.Parallel()
-	ripgrepPath := testutil.RequireNixRipgrep(t)
+	ripgrepPath := testutil.RequireNixRipgrepOrSkip(t)
 
 	testCases := []struct {
 		name      string

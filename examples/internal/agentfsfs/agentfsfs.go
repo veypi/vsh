@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	agentfs "github.com/tursodatabase/agentfs/sdk/go"
 	"github.com/veypi/vsh"
 	gbfs "github.com/veypi/vsh/fs"
-	agentfs "github.com/tursodatabase/agentfs/sdk/go"
 )
 
 const maxSymlinkDepth = 40

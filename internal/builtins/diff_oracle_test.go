@@ -22,7 +22,7 @@ type diffOracleResult struct {
 
 func TestDiffMatchesGNUDiff(t *testing.T) {
 	t.Parallel()
-	diffPath := testutil.RequireNixDiff(t)
+	diffPath := testutil.RequireNixDiffOrSkip(t)
 
 	testCases := []struct {
 		name  string

@@ -411,7 +411,6 @@ func (r *teeInputReader) Read(buf []byte) (int, error) {
 	return n, err
 }
 
-
 func teeWriteOpenError(stderr io.Writer, name string, err error) error {
 	if stderr != nil {
 		_, _ = fmt.Fprintf(stderr, "tee: %s: %v\n", name, err)

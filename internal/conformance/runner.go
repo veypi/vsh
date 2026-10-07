@@ -21,10 +21,10 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/veypi/vsh"
 	"github.com/veypi/vsh/commands"
 	gbfs "github.com/veypi/vsh/fs"
 	"github.com/veypi/vsh/internal/builtins"
-	"github.com/veypi/vsh"
 	"github.com/veypi/vsh/internal/testutil"
 	"github.com/veypi/vsh/policy"
 	"github.com/veypi/vsh/shell/syntax"
@@ -951,10 +951,10 @@ func vshEnv(cfg *SuiteConfig, specPath string) map[string]string {
 		shName = oracleBinaryName(OracleBash)
 	}
 	env := map[string]string{
-		"LANG":                  locale,
-		"LC_ALL":                locale,
-		"SH":                    shName,
-		"TZ":                    "UTC",
+		"LANG":                locale,
+		"LC_ALL":              locale,
+		"SH":                  shName,
+		"TZ":                  "UTC",
 		"VSH_CONFORMANCE_SED": "sed",
 	}
 	if useScopedGlobWorkspace(specPath) {
@@ -996,15 +996,15 @@ func bashEnv(cfg *SuiteConfig, workspace, specPath string) []string {
 		shName = oracleBinaryName(OracleBash)
 	}
 	env := map[string]string{
-		"HOME":                  workspace,
-		"PWD":                   workspace,
-		"PATH":                  filepath.Join(workspace, "bin") + ":/usr/bin:/bin",
-		"LANG":                  locale,
-		"LC_ALL":                locale,
-		"SH":                    shName,
-		"TZ":                    "UTC",
-		"TMP":                   filepath.Join(workspace, "tmp"),
-		"TMPDIR":                filepath.Join(workspace, "tmp"),
+		"HOME":                workspace,
+		"PWD":                 workspace,
+		"PATH":                filepath.Join(workspace, "bin") + ":/usr/bin:/bin",
+		"LANG":                locale,
+		"LC_ALL":              locale,
+		"SH":                  shName,
+		"TZ":                  "UTC",
+		"TMP":                 filepath.Join(workspace, "tmp"),
+		"TMPDIR":              filepath.Join(workspace, "tmp"),
 		"VSH_CONFORMANCE_SED": conformanceToolPath("sed"),
 	}
 	if needsRepoRootEnv(specPath) {

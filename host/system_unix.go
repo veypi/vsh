@@ -13,7 +13,7 @@ func systemExecutionMeta() ExecutionMeta {
 	return ExecutionMeta{
 		PID:          os.Getpid(),
 		PPID:         os.Getppid(),
-		ProcessGroup: unix.Getpgrp(),
+		ProcessGroup: processGroupID(),
 	}
 }
 

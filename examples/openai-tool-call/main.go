@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/veypi/vsh"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/responses"
+	"github.com/veypi/vsh"
 )
 
 const (

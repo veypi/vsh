@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"syscall"
 	"testing"
 )
 
@@ -219,7 +218,7 @@ func TestOutputWithETXTBSYRetryRetriesTransientExecRace(t *testing.T) {
 	out, err := outputWithETXTBSYRetry(func() ([]byte, error) {
 		calls++
 		if calls < 3 {
-			return nil, &fs.PathError{Op: "fork/exec", Path: "/tmp/gen-lists-of-programs.sh", Err: syscall.ETXTBSY}
+			return nil, &fs.PathError{Op: "fork/exec", Path: "/tmp/gen-lists-of-programs.sh", Err: errTextBusy}
 		}
 		return []byte("basename dirname\n"), nil
 	})

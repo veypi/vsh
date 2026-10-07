@@ -1,4 +1,4 @@
-//go:build js
+//go:build js || wasip1
 
 package fs
 
@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// ReadWriteFS is unavailable in the browser/wasm target.
+// ReadWriteFS is unavailable on js/wasm and wasip1.
 type ReadWriteFS struct{}
 
-// NewReadWrite returns an unsupported error on js/wasm.
+// NewReadWrite returns an unsupported error on js/wasm and wasip1.
 func NewReadWrite(ReadWriteOptions) (*ReadWriteFS, error) {
 	return nil, unsupportedHostError()
 }

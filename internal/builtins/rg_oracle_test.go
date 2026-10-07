@@ -15,7 +15,7 @@ import (
 func TestRGMatchesRipgrep(t *testing.T) {
 	t.Parallel()
 
-	ripgrepPath := testutil.RequireNixRipgrep(t)
+	ripgrepPath := testutil.RequireNixRipgrepOrSkip(t)
 	testCases := []struct {
 		name       string
 		stdin      string

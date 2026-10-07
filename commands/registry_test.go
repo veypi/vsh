@@ -101,4 +101,3 @@ func TestRegisterGuardedRejectsDuplicate(t *testing.T) {
 		t.Fatal("Register must keep replace semantics")
 	}
 }
-

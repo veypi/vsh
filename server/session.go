@@ -60,16 +60,16 @@ type sessionIDParams struct {
 }
 
 type sessionExecParams struct {
-	SessionID      string             `json:"session_id"`
-	Name           string             `json:"name"`
-	Script         string             `json:"script"`
-	ShellVariant   vsh.ShellVariant `json:"shell_variant"`
-	Args           []string           `json:"args"`
-	StartupOptions []string           `json:"startup_options"`
-	Env            map[string]string  `json:"env"`
-	WorkDir        string             `json:"work_dir"`
-	ReplaceEnv     bool               `json:"replace_env"`
-	TimeoutMs      int64              `json:"timeout_ms"`
+	SessionID      string            `json:"session_id"`
+	Name           string            `json:"name"`
+	Script         string            `json:"script"`
+	ShellVariant   vsh.ShellVariant  `json:"shell_variant"`
+	Args           []string          `json:"args"`
+	StartupOptions []string          `json:"startup_options"`
+	Env            map[string]string `json:"env"`
+	WorkDir        string            `json:"work_dir"`
+	ReplaceEnv     bool              `json:"replace_env"`
+	TimeoutMs      int64             `json:"timeout_ms"`
 }
 
 type sessionExecResult struct {

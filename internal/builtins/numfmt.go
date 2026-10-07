@@ -1510,7 +1510,6 @@ func numfmtWriteRawLine(writer io.Writer, line []byte, emitTerminator bool, term
 	return nil
 }
 
-
 func numfmtIllegalf(format string, args ...any) error {
 	return &numfmtError{code: 1, msg: "numfmt: " + fmt.Sprintf(format, args...)}
 }

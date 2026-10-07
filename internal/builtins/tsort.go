@@ -344,7 +344,6 @@ func tsortDisplayName(name string) string {
 	return name
 }
 
-
 var _ Command = (*Tsort)(nil)
 var _ SpecProvider = (*Tsort)(nil)
 var _ ParsedRunner = (*Tsort)(nil)

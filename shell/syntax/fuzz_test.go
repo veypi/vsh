@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/veypi/vsh/internal/testutil"
 	"github.com/go-quicktest/qt"
+	"github.com/veypi/vsh/internal/testutil"
 )
 
 func FuzzQuote(f *testing.F) {

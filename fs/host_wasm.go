@@ -1,4 +1,4 @@
-//go:build js
+//go:build js || wasip1
 
 package fs
 
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var errHostUnsupported = errors.New("host-backed filesystem is unsupported on js/wasm")
+var errHostUnsupported = errors.New("host-backed filesystem is unsupported on js/wasm and wasip1")
 
 // HostFS is unavailable in the browser/wasm target.
 type HostFS struct{}

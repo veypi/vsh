@@ -322,7 +322,7 @@ func (m *MountableFS) Link(ctx context.Context, oldName, newName string) error {
 	oldEntry, oldRel, oldMounted, _ := m.route(oldAbs)
 	newEntry, newRel, newMounted, _ := m.route(newAbs)
 	if oldMounted != newMounted || (oldMounted && oldEntry.mountPoint != newEntry.mountPoint) {
-		return &os.LinkError{Op: "link", Old: oldAbs, New: newAbs, Err: syscall.EXDEV}
+		return &os.LinkError{Op: "link", Old: oldAbs, New: newAbs, Err: errnoCrossDevice}
 	}
 	if oldMounted {
 		return namespacedFS{mountPoint: oldEntry.mountPoint, inner: oldEntry.fs}.Link(ctx, oldRel, newRel)

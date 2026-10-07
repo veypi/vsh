@@ -102,7 +102,6 @@ func prepareYesBuffer(buffer []byte) []byte {
 	return buffer
 }
 
-
 const yesHelpText = `Repeatedly display a line with STRING (or 'y')
 
 Usage: yes [STRING]...
