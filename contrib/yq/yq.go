@@ -15,9 +15,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mikefarah/yq/v4/pkg/yqlib"
 	"github.com/veypi/vsh/commands"
 	gbfs "github.com/veypi/vsh/fs"
-	"github.com/mikefarah/yq/v4/pkg/yqlib"
 	logging "gopkg.in/op/go-logging.v1"
 )
 

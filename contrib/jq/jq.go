@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/veypi/vsh/commands"
 	"github.com/itchyny/gojq"
+	"github.com/veypi/vsh/commands"
 )
 
 type JQ struct{}

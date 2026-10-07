@@ -3,8 +3,8 @@ module github.com/veypi/vsh/contrib/sqlite3
 go 1.26.0
 
 require (
-	github.com/veypi/vsh v0.0.38
 	github.com/ncruces/go-sqlite3 v0.31.1
+	github.com/veypi/vsh v0.2.0
 )
 
 require (

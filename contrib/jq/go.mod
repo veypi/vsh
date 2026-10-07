@@ -3,8 +3,8 @@ module github.com/veypi/vsh/contrib/jq
 go 1.26.0
 
 require (
-	github.com/veypi/vsh v0.0.38
 	github.com/itchyny/gojq v0.12.18
+	github.com/veypi/vsh v0.2.0
 	golang.org/x/term v0.43.0
 )
 

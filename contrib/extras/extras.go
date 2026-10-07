@@ -9,7 +9,6 @@ import (
 	contribawk "github.com/veypi/vsh/contrib/awk"
 	contribhtmltomarkdown "github.com/veypi/vsh/contrib/htmltomarkdown"
 	contribjq "github.com/veypi/vsh/contrib/jq"
-	contribpython "github.com/veypi/vsh/contrib/python"
 	contribsqlite3 "github.com/veypi/vsh/contrib/sqlite3"
 	contribyq "github.com/veypi/vsh/contrib/yq"
 )
@@ -35,9 +34,6 @@ func Register(registry commands.CommandRegistry) error {
 		return err
 	}
 	if err := contribjq.Register(registry); err != nil {
-		return err
-	}
-	if err := contribpython.Register(registry); err != nil {
 		return err
 	}
 	if err := contribsqlite3.Register(registry); err != nil {

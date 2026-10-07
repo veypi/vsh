@@ -6,8 +6,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/veypi/vsh/commands"
 	"github.com/itchyny/gojq"
+	"github.com/veypi/vsh/commands"
 )
 
 type sandboxJQModuleLoader struct {

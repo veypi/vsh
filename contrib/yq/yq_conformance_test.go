@@ -7,8 +7,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/veypi/vsh/internal/conformance"
 	"github.com/veypi/vsh"
+	"github.com/veypi/vsh/internal/conformance"
 	"github.com/veypi/vsh/internal/testutil"
 )
 

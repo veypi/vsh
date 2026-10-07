@@ -3,8 +3,8 @@ module github.com/veypi/vsh/contrib/yq
 go 1.26.0
 
 require (
-	github.com/veypi/vsh v0.0.38
 	github.com/mikefarah/yq/v4 v4.52.4
+	github.com/veypi/vsh v0.2.0
 	gopkg.in/op/go-logging.v1 v1.0.0-20160211212156-b2cb9fa56473
 )
 

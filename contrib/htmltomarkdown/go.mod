@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
-	github.com/veypi/vsh v0.0.38
+	github.com/veypi/vsh v0.2.0
 )
 
 require (
