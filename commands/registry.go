@@ -62,7 +62,7 @@ func (r *Registry) Register(cmd Command) error {
 
 // RegisterGuarded stores cmd by name but fails with an explicit error when the
 // name is already taken. Embedders that compose command sets from multiple
-// sources (如 aic-pod/libs/execution 注册平台命令）用它强制 root 命令不静默
+// sources（宿主集成层注册平台命令）用它强制 root 命令不静默
 // 覆盖内建或其他包。
 func (r *Registry) RegisterGuarded(cmd Command) error {
 	if cmd == nil {
