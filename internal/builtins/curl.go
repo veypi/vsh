@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	stdfs "io/fs"
 	"maps"
 	"net/http"
@@ -44,6 +45,8 @@ type curlOptions struct {
 	verbose         bool
 	timeout         time.Duration
 	url             string
+	proxy           string
+	proxySet        bool // 区分「未给 -x」与「-x "" 显式禁用代理」
 }
 
 type curlFormField struct {
@@ -83,6 +86,7 @@ const curlHelpText = `usage: curl [OPTIONS] URL
       --max-redirs NUM       accepted for compatibility
   -m, --max-time SECS        maximum request time
       --connect-timeout SECS accepted as an overall timeout fallback
+  -x, --proxy URL            use proxy ([scheme://]host[:port]; empty disables; overrides env)
   -w, --write-out FMT        output format after completion
   -v, --verbose              verbose output
       --help                 show this help
@@ -129,6 +133,7 @@ func (c *Curl) Spec() CommandSpec {
 			{Name: "max-redirs", Long: "max-redirs", Arity: OptionOptionalValue, ValueName: "NUM", Help: "accepted for compatibility"},
 			{Name: "max-time", Short: 'm', Long: "max-time", Arity: OptionRequiredValue, ValueName: "SECS", Help: "maximum request time"},
 			{Name: "connect-timeout", Long: "connect-timeout", Arity: OptionRequiredValue, ValueName: "SECS", Help: "accepted as an overall timeout fallback"},
+			{Name: "proxy", Short: 'x', Long: "proxy", Arity: OptionRequiredValue, ValueName: "URL", Help: "use proxy ([scheme://]host[:port]; empty disables; overrides env)"},
 			{Name: "write-out", Short: 'w', Long: "write-out", Arity: OptionRequiredValue, ValueName: "FMT", Help: "output format after completion"},
 			{Name: "verbose", Short: 'v', Long: "verbose", Help: "verbose output"},
 			{Name: "help", Long: "help", Help: "show this help"},
@@ -194,38 +199,90 @@ func (c *Curl) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 	}
 	headers := prepareCurlHeaders(opts, contentType)
 
-	resp, err := inv.Fetch(ctx, &network.Request{
+	// -o/-O：目标文件先建好，响应体走流式投递（边收边写，不整块驻留内存）。
+	var (
+		outFile   gbfs.File
+		outAbs    string
+		headerErr error
+	)
+	if opts.outputFile != "" || opts.useRemoteName {
+		filename := opts.outputFile
+		if filename == "" {
+			filename = extractCurlFilename(requestURL)
+		}
+		outAbs = gbfs.Resolve(inv.Cwd, filename)
+		outFile, err = createFileForWrite(ctx, inv, outAbs, 0o644)
+		if err != nil {
+			return err
+		}
+	}
+
+	req := &network.Request{
 		Method:          opts.method,
 		URL:             requestURL,
 		Headers:         headers,
 		Body:            body,
 		FollowRedirects: opts.followRedirects,
 		Timeout:         opts.timeout,
-	})
+		ProxyURL:        resolveCurlProxy(inv, requestURL, opts),
+	}
+	if outFile != nil {
+		req.Sink = outFile
+		if opts.includeHeaders {
+			// -i：头块先于正文落盘（与真实 curl 一致）——回调发生在响应头
+			// 到达、正文写出之前，此时才拿得到状态行与响应头。
+			req.OnResponse = func(statusCode int, status string, respHeaders map[string]string) {
+				if _, werr := fmt.Fprintf(outFile, "HTTP/1.1 %d %s\r\n", statusCode, curlStatusTextOf(status, statusCode)); werr != nil {
+					headerErr = werr
+					return
+				}
+				if _, werr := io.WriteString(outFile, formatCurlHeaders(respHeaders)+"\r\n\r\n"); werr != nil {
+					headerErr = werr
+				}
+			}
+		}
+	}
+
+	resp, err := inv.Fetch(ctx, req)
+	if err == nil && headerErr != nil {
+		err = headerErr
+	}
 	if err != nil {
+		curlDiscardOutput(ctx, inv, outFile, outAbs)
 		return curlRequestError(inv, opts, err)
 	}
 
 	if err := saveCurlCookies(ctx, inv, opts, resp); err != nil {
+		curlDiscardOutput(ctx, inv, outFile, outAbs)
 		return err
 	}
 
 	if opts.failSilently && resp.StatusCode >= 400 {
+		// -f：失败不留输出文件（与 curl -f「不产生输出」一致）。
+		curlDiscardOutput(ctx, inv, outFile, outAbs)
 		if !opts.silent || opts.showError {
 			return exitf(inv, 22, "curl: (22) The requested URL returned error: %d", resp.StatusCode)
 		}
 		return &ExitError{Code: 22}
 	}
 
+	if outFile != nil {
+		if !resp.Streamed {
+			// 客户端未实现流式投递：退化为整体写入（此时正文已在内存里）。
+			if _, werr := outFile.Write(curlOutputFileBody(opts, resp)); werr != nil {
+				curlDiscardOutput(ctx, inv, outFile, outAbs)
+				return &ExitError{Code: 1, Err: werr}
+			}
+		}
+		if cerr := outFile.Close(); cerr != nil {
+			_ = inv.FS.Remove(ctx, outAbs, false)
+			return &ExitError{Code: 1, Err: cerr}
+		}
+		recordFileMutation(inv.TraceRecorder(), "write", outAbs, outAbs, outAbs)
+	}
+
 	output := buildCurlOutput(opts, resp, requestURL)
-	if opts.outputFile != "" || opts.useRemoteName {
-		filename := opts.outputFile
-		if filename == "" {
-			filename = extractCurlFilename(requestURL)
-		}
-		if err := writeFileContents(ctx, inv, gbfs.Resolve(inv.Cwd, filename), curlOutputFileBody(opts, resp), 0o644); err != nil {
-			return err
-		}
+	if outFile != nil {
 		if !opts.verbose {
 			output.Reset()
 		}
@@ -264,6 +321,7 @@ func parseCurlMatches(matches *ParsedCommand) (*curlOptions, error) {
 		"upload-file":     matches.Values("upload-file"),
 		"max-time":        matches.Values("max-time"),
 		"connect-timeout": matches.Values("connect-timeout"),
+		"proxy":           matches.Values("proxy"),
 		"output":          matches.Values("output"),
 		"write-out":       matches.Values("write-out"),
 	}
@@ -314,6 +372,9 @@ func parseCurlMatches(matches *ParsedCommand) (*curlOptions, error) {
 			if opts.timeout <= 0 {
 				opts.timeout = parseCurlTimeout(value)
 			}
+		case "proxy":
+			opts.proxy = value
+			opts.proxySet = true
 		case "output":
 			opts.outputFile = value
 		case "remote-name":
@@ -367,7 +428,7 @@ func splitCurlAttachedShort(arg string) (option, value string, ok bool) {
 		return "", "", false
 	}
 	switch arg[:2] {
-	case "-X", "-d", "-u", "-A", "-e", "-b":
+	case "-X", "-d", "-u", "-A", "-e", "-b", "-x":
 		return arg[:2], arg[2:], true
 	default:
 		return "", "", false
@@ -380,7 +441,7 @@ func curlMissingValueFallback(arg string) (fallback string, ok bool) {
 		return "GET", true
 	case "-H", "--header", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form",
 		"-u", "--user", "-A", "--user-agent", "-e", "--referer", "-b", "--cookie", "-c", "--cookie-jar",
-		"-T", "--upload-file", "-m", "--max-time", "--connect-timeout", "-o", "--output", "-w", "--write-out":
+		"-T", "--upload-file", "-m", "--max-time", "--connect-timeout", "-x", "--proxy", "-o", "--output", "-w", "--write-out":
 		return "", true
 	default:
 		return "", false
@@ -401,6 +462,95 @@ func parseCurlTimeout(value string) time.Duration {
 		return 0
 	}
 	return time.Duration(secs * float64(time.Second))
+}
+
+// resolveCurlProxy 解析本次请求的代理：-x/--proxy 优先于会话环境变量；
+// -x "" 显式禁用。环境变量按目标 scheme 取 https_proxy/http_proxy（小写
+// 优先、大写兼容），兜底 all_proxy；no_proxy 命中则直连。返回值已规范化
+// （缺 scheme 补 http://）。是否真正使用由网络客户端的 UseProxy 配置决定
+// （未启用时客户端忽略 Request.ProxyURL）。不读进程环境——沙箱内 curl 只
+// 看会话 env。
+func resolveCurlProxy(inv *Invocation, requestURL string, opts *curlOptions) string {
+	if opts.proxySet {
+		return normalizeCurlProxyURL(opts.proxy)
+	}
+	if inv == nil || len(inv.Env) == 0 {
+		return ""
+	}
+	if curlNoProxyMatch(envValue(inv.Env, "no_proxy", "NO_PROXY"), requestURL) {
+		return ""
+	}
+	scheme := "https"
+	if strings.HasPrefix(requestURL, "http://") {
+		scheme = "http"
+	}
+	raw := envValue(inv.Env, scheme+"_proxy", strings.ToUpper(scheme)+"_PROXY")
+	if raw == "" {
+		raw = envValue(inv.Env, "all_proxy", "ALL_PROXY")
+	}
+	return normalizeCurlProxyURL(raw)
+}
+
+func envValue(env map[string]string, names ...string) string {
+	for _, name := range names {
+		if v := strings.TrimSpace(env[name]); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func normalizeCurlProxyURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	return raw
+}
+
+// curlNoProxyMatch 判断 no_proxy 列表是否命中目标：逗号分隔；"*" 全命中；
+// 条目按主机后缀匹配（前导 . 忽略），可带 :port 限定；大小写不敏感。
+func curlNoProxyMatch(noProxy, requestURL string) bool {
+	if strings.TrimSpace(noProxy) == "" {
+		return false
+	}
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	port := parsed.Port()
+	if port == "" {
+		if parsed.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	for _, entry := range strings.Split(noProxy, ",") {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "" {
+			continue
+		}
+		if entry == "*" {
+			return true
+		}
+		entryHost, entryPort, hasPort := strings.Cut(entry, ":")
+		if hasPort && entryPort != port {
+			continue
+		}
+		entryHost = strings.TrimPrefix(entryHost, ".")
+		if host == entryHost || strings.HasSuffix(host, "."+entryHost) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCurlHeader(headers map[string]string, header string) {
@@ -606,14 +756,28 @@ func curlStatusText(resp *network.Response) string {
 	if resp == nil {
 		return ""
 	}
-	status := strings.TrimSpace(resp.Status)
+	return curlStatusTextOf(resp.Status, resp.StatusCode)
+}
+
+func curlStatusTextOf(status string, statusCode int) string {
+	status = strings.TrimSpace(status)
 	if status == "" {
-		return http.StatusText(resp.StatusCode)
+		return http.StatusText(statusCode)
 	}
-	if after, ok := strings.CutPrefix(status, strconv.Itoa(resp.StatusCode)); ok {
+	if after, ok := strings.CutPrefix(status, strconv.Itoa(statusCode)); ok {
 		return strings.TrimSpace(after)
 	}
 	return status
+}
+
+// curlDiscardOutput 关闭并删除未完成的下载文件：fetch/落盘中途失败时不留半截
+// 文件（否则调用方会把残缺体当成完整结果）。
+func curlDiscardOutput(ctx context.Context, inv *Invocation, file gbfs.File, abs string) {
+	if file == nil {
+		return
+	}
+	_ = file.Close()
+	_ = inv.FS.Remove(ctx, abs, false)
 }
 
 func formatCurlHeaders(headers map[string]string) string {
@@ -647,7 +811,7 @@ func applyCurlWriteOut(format string, resp *network.Response) string {
 	output = strings.ReplaceAll(output, "%{http_code}", strconv.Itoa(resp.StatusCode))
 	output = strings.ReplaceAll(output, "%{content_type}", curlHeaderValue(resp.Headers, "Content-Type"))
 	output = strings.ReplaceAll(output, "%{url_effective}", resp.URL)
-	output = strings.ReplaceAll(output, "%{size_download}", strconv.Itoa(len(resp.Body)))
+	output = strings.ReplaceAll(output, "%{size_download}", strconv.FormatInt(curlDownloadSize(resp), 10))
 	output = strings.ReplaceAll(output, "\\n", "\n")
 	return output
 }
@@ -666,6 +830,18 @@ func curlOutputFileBody(opts *curlOptions, resp *network.Response) []byte {
 		return nil
 	}
 	return resp.Body
+}
+
+// curlDownloadSize 已下载字节数：流式投递时为 BytesWritten（Body 为空），
+// 内存路径为 Body 长度。
+func curlDownloadSize(resp *network.Response) int64 {
+	if resp == nil {
+		return 0
+	}
+	if resp.Streamed {
+		return resp.BytesWritten
+	}
+	return int64(len(resp.Body))
 }
 
 func curlRequestError(inv *Invocation, opts *curlOptions, err error) error {

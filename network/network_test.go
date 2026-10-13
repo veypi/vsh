@@ -332,3 +332,119 @@ func TestClientIgnoresHostProxyEnvironment(t *testing.T) {
 		t.Fatal("proxy server was used, want direct sandbox-controlled dial")
 	}
 }
+
+// TestClientHonorsRequestProxyWhenEnabled：UseProxy 开启时 Request.ProxyURL
+// 生效——请求拨向代理而非目标（代理返回 502 标记体，区别于后端 200）。
+func TestClientHonorsRequestProxyWhenEnabled(t *testing.T) {
+	var mu sync.Mutex
+	proxyHit := false
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		proxyHit = true
+		mu.Unlock()
+		http.Error(w, "via-proxy", http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+
+	client, err := New(&Config{
+		AllowedURLPrefixes: []string{"http://allowed.example.test"},
+		UseProxy:           true,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	resp, err := client.Do(context.Background(), &Request{
+		URL:      "http://allowed.example.test/path",
+		ProxyURL: proxy.URL,
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if got, want := resp.StatusCode, http.StatusBadGateway; got != want {
+		t.Fatalf("StatusCode = %d, want %d（应拿到代理的响应）", got, want)
+	}
+	mu.Lock()
+	hit := proxyHit
+	mu.Unlock()
+	if !hit {
+		t.Fatal("proxy server was not used, want Request.ProxyURL honored when UseProxy is on")
+	}
+}
+
+// TestClientIgnoresRequestProxyWhenDisabled：默认（UseProxy=false）忽略
+// Request.ProxyURL，直连目标——代理不被触碰。
+func TestClientIgnoresRequestProxyWhenDisabled(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("backend"))
+	}))
+	defer backend.Close()
+
+	var mu sync.Mutex
+	proxyHit := false
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		proxyHit = true
+		mu.Unlock()
+		http.Error(w, "proxy", http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+
+	client, err := New(&Config{
+		AllowedURLPrefixes: []string{backend.URL},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	resp, err := client.Do(context.Background(), &Request{
+		URL:      backend.URL + "/direct",
+		ProxyURL: proxy.URL,
+	})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if got, want := string(resp.Body), "backend"; got != want {
+		t.Fatalf("Body = %q, want %q", got, want)
+	}
+	mu.Lock()
+	hit := proxyHit
+	mu.Unlock()
+	if hit {
+		t.Fatal("proxy server was used with UseProxy off, want Request.ProxyURL ignored")
+	}
+}
+
+func TestParseProxyURL(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{"http://127.0.0.1:7897", "http://127.0.0.1:7897", false},
+		{"127.0.0.1:7897", "http://127.0.0.1:7897", false},
+		{"socks5://127.0.0.1:7897", "socks5://127.0.0.1:7897", false},
+		{"socks5h://127.0.0.1:7897", "socks5h://127.0.0.1:7897", false},
+		{"https://user:pass@proxy.example:8443", "https://user:pass@proxy.example:8443", false},
+		{"", "", true},
+		{"ftp://proxy.example", "", true},
+		{"http://", "", true},
+	}
+	for _, tc := range cases {
+		got, err := ParseProxyURL(tc.raw)
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("ParseProxyURL(%q) error = nil, want error", tc.raw)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("ParseProxyURL(%q) error = %v", tc.raw, err)
+		}
+		if got.String() != tc.want {
+			t.Fatalf("ParseProxyURL(%q) = %q, want %q", tc.raw, got.String(), tc.want)
+		}
+	}
+}

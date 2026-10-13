@@ -27,9 +27,8 @@ const (
 )
 
 const (
-	defaultMaxRedirects    = 20
-	defaultTimeout         = 30 * time.Second
-	defaultMaxResponseSize = 10 << 20
+	defaultMaxRedirects = 20
+	defaultTimeout      = 30 * time.Second
 )
 
 var defaultAllowedMethods = []Method{MethodGet, MethodHead}
@@ -39,8 +38,16 @@ type Config struct {
 	AllowedMethods     []Method
 	MaxRedirects       int
 	Timeout            time.Duration
-	MaxResponseBytes   int64
-	DenyPrivateRanges  bool
+	// MaxResponseBytes 限制单个响应体的字节数；<= 0（默认）不限制。上限由
+	// 引入方按场景给（云端下载限 64 MiB、设备端不限）。
+	MaxResponseBytes  int64
+	DenyPrivateRanges bool
+	// UseProxy 允许请求经代理（Request.ProxyURL，curl 由 -x/会话环境变量
+	// 解析填入）。默认 false = 忽略一切代理设置、恒直连（沙箱受控拨号契约）；
+	// 多租户云端必须保持 false——代理使 dial 目标变成代理服务器，绕过私网
+	// 阻断。仅内置 transport 生效；WithDoer 注入的自定义实现需自行处理
+	// Request.ProxyURL。
+	UseProxy bool
 }
 
 type Request struct {
@@ -50,6 +57,17 @@ type Request struct {
 	Body            []byte
 	FollowRedirects bool
 	Timeout         time.Duration
+	// Sink（可选）请求流式投递响应体：客户端边收边写入 Sink，Response.Body
+	// 留空、Response.Streamed 置真——大文件下载不再整块驻留内存。忽略 Sink
+	// 的客户端照常返回 Body，调用方两条路都必须能收（见 curl -o）。
+	Sink io.Writer
+	// OnResponse（可选）在响应头到达、正文写出之前回调一次，让调用方先把自己
+	// 的前缀写进 Sink（curl -i 的头块）；仅 Sink 非 nil 时有意义。
+	OnResponse func(statusCode int, status string, headers map[string]string)
+	// ProxyURL 本次请求的显式代理（curl 由 -x 或会话环境变量 HTTPS_PROXY/
+	// HTTP_PROXY/ALL_PROXY 解析填入，已规范化为带 scheme 的 URL）。仅在客户
+	// 端配置 UseProxy 时生效，否则被忽略。
+	ProxyURL string
 }
 
 type Response struct {
@@ -58,6 +76,10 @@ type Response struct {
 	Headers    map[string]string
 	Body       []byte
 	URL        string
+	// Streamed 表示响应体已流式写入 Request.Sink（此时 Body 为空）。
+	Streamed bool
+	// BytesWritten 是流式投递的字节数（Streamed 为 false 时恒为 0）。
+	BytesWritten int64
 }
 
 type Client interface {
@@ -87,6 +109,7 @@ type resolvedConfig struct {
 	timeout            time.Duration
 	maxResponseBytes   int64
 	denyPrivateRanges  bool
+	useProxy           bool
 }
 
 type allowListEntry struct {
@@ -197,7 +220,13 @@ func New(cfg *Config, opts ...Option) (*HTTPClient, error) {
 func (c *HTTPClient) defaultDoer() HTTPDoer {
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy:                 nil,
+			// 代理按请求从 ctx 取（Do 在 UseProxy 开启且 req.ProxyURL 非空时
+			// 注入）；不读进程环境变量——沙箱受控拨号，环境代理由 curl 从
+			// 会话 env 显式解析后经 Request.ProxyURL 传入。
+			Proxy: func(httpReq *http.Request) (*url.URL, error) {
+				proxyURL, _ := httpReq.Context().Value(requestProxyKey{}).(*url.URL)
+				return proxyURL, nil
+			},
 			DialContext:           c.dialContext,
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          100,
@@ -308,10 +337,8 @@ func resolveConfig(cfg *Config) (resolvedConfig, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
+	// maxResponseBytes <= 0 = 不限制（默认）：上限是引入方的配置项。
 	maxResponseBytes := cfg.MaxResponseBytes
-	if maxResponseBytes <= 0 {
-		maxResponseBytes = defaultMaxResponseSize
-	}
 
 	return resolvedConfig{
 		allowedURLPrefixes: entries,
@@ -320,6 +347,7 @@ func resolveConfig(cfg *Config) (resolvedConfig, error) {
 		timeout:            timeout,
 		maxResponseBytes:   maxResponseBytes,
 		denyPrivateRanges:  cfg.DenyPrivateRanges,
+		useProxy:           cfg.UseProxy,
 	}, nil
 }
 
@@ -361,6 +389,13 @@ func (c *HTTPClient) Do(ctx context.Context, req *Request) (*Response, error) {
 		if err != nil {
 			return nil, err
 		}
+		if c.cfg.useProxy && req.ProxyURL != "" {
+			proxyURL, perr := ParseProxyURL(req.ProxyURL)
+			if perr != nil {
+				return nil, perr
+			}
+			httpReq = httpReq.WithContext(context.WithValue(httpReq.Context(), requestProxyKey{}, proxyURL))
+		}
 		for name, value := range req.Headers {
 			httpReq.Header.Set(name, value)
 		}
@@ -372,7 +407,7 @@ func (c *HTTPClient) Do(ctx context.Context, req *Request) (*Response, error) {
 		if isRedirect(resp.StatusCode) && req.FollowRedirects {
 			location := strings.TrimSpace(resp.Header.Get("Location"))
 			if location == "" {
-				return c.readResponse(currentURL, resp)
+				return c.readResponse(req, currentURL, resp)
 			}
 			_ = resp.Body.Close()
 
@@ -391,12 +426,38 @@ func (c *HTTPClient) Do(ctx context.Context, req *Request) (*Response, error) {
 			continue
 		}
 
-		return c.readResponse(currentURL, resp)
+		return c.readResponse(req, currentURL, resp)
 	}
 }
 
-func (c *HTTPClient) readResponse(requestURL string, resp *http.Response) (*Response, error) {
+func (c *HTTPClient) readResponse(req *Request, requestURL string, resp *http.Response) (*Response, error) {
 	defer func() { _ = resp.Body.Close() }()
+
+	headers := make(map[string]string, len(resp.Header))
+	for name, values := range resp.Header {
+		headers[name] = strings.Join(values, ", ")
+	}
+
+	out := &Response{
+		StatusCode: resp.StatusCode,
+		Status:     resp.Status,
+		Headers:    headers,
+		URL:        requestURL,
+	}
+
+	// 流式投递：响应体直写 Sink，不在内存里成型。
+	if req != nil && req.Sink != nil {
+		if req.OnResponse != nil {
+			req.OnResponse(resp.StatusCode, resp.Status, headers)
+		}
+		written, err := CopyResponseBody(req.Sink, resp.Body, c.cfg.maxResponseBytes, resp.ContentLength)
+		if err != nil {
+			return nil, err
+		}
+		out.Streamed = true
+		out.BytesWritten = written
+		return out, nil
+	}
 
 	if c.cfg.maxResponseBytes > 0 && resp.ContentLength > c.cfg.maxResponseBytes {
 		return nil, &ResponseTooLargeError{MaxBytes: c.cfg.maxResponseBytes}
@@ -413,19 +474,37 @@ func (c *HTTPClient) readResponse(requestURL string, resp *http.Response) (*Resp
 	if c.cfg.maxResponseBytes > 0 && int64(len(body)) > c.cfg.maxResponseBytes {
 		return nil, &ResponseTooLargeError{MaxBytes: c.cfg.maxResponseBytes}
 	}
+	out.Body = body
+	return out, nil
+}
 
-	headers := make(map[string]string, len(resp.Header))
-	for name, values := range resp.Header {
-		headers[name] = strings.Join(values, ", ")
+// CopyResponseBody 把响应体从 src 流式搬运到 dst：预检 Content-Length，再按块
+// 读—写，内存占用与响应体大小无关；maxBytes > 0 时跨线立即中止（超限的数据
+// 不落盘）。供各 NetClient 实现复用，保证流式语义一致。
+func CopyResponseBody(dst io.Writer, src io.Reader, maxBytes, contentLength int64) (int64, error) {
+	if maxBytes > 0 && contentLength > maxBytes {
+		return 0, &ResponseTooLargeError{MaxBytes: maxBytes}
 	}
-
-	return &Response{
-		StatusCode: resp.StatusCode,
-		Status:     resp.Status,
-		Headers:    headers,
-		Body:       body,
-		URL:        requestURL,
-	}, nil
+	buf := make([]byte, 32<<10)
+	var total int64
+	for {
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			if maxBytes > 0 && total+int64(n) > maxBytes {
+				return total, &ResponseTooLargeError{MaxBytes: maxBytes}
+			}
+			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
+				return total, writeErr
+			}
+			total += int64(n)
+		}
+		switch {
+		case readErr == io.EOF:
+			return total, nil
+		case readErr != nil:
+			return total, readErr
+		}
+	}
 }
 
 func (c *HTTPClient) checkURLAllowed(ctx context.Context, rawURL string) error {
@@ -562,8 +641,36 @@ func resolveRedirectURL(currentURL, location string) (string, error) {
 	return base.ResolveReference(next).String(), nil
 }
 
-func isRedirect(statusCode int) bool {
-	switch statusCode {
+// requestProxyKey 把本次请求的代理 URL 经 ctx 传给 transport 的 Proxy 挂钩
+// （transport 是共享的，代理是按请求的）。
+type requestProxyKey struct{}
+
+// ParseProxyURL 规范化并校验代理 URL：缺 scheme 补 http://；只允许
+// http/https/socks5/socks5h（net/http transport 原生支持的集合）。
+func ParseProxyURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("empty proxy URL")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL %q: %w", raw, err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, fmt.Errorf("unsupported proxy scheme %q (want http/https/socks5/socks5h)", u.Scheme)
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("invalid proxy URL %q: missing host", raw)
+	}
+	return u, nil
+}
+
+func isRedirect(statusCode int) bool {	switch statusCode {
 	case http.StatusMovedPermanently,
 		http.StatusFound,
 		http.StatusSeeOther,

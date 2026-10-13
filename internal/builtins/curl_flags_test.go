@@ -26,6 +26,7 @@ func (c *curlStubClient) Do(ctx context.Context, req *network.Request) (*network
 		Body:            append([]byte(nil), req.Body...),
 		FollowRedirects: req.FollowRedirects,
 		Timeout:         req.Timeout,
+		ProxyURL:        req.ProxyURL,
 	}
 
 	c.mu.Lock()
@@ -58,6 +59,7 @@ func (c *curlStubClient) LastRequest() *network.Request {
 		Body:            append([]byte(nil), last.Body...),
 		FollowRedirects: last.FollowRedirects,
 		Timeout:         last.Timeout,
+		ProxyURL:        last.ProxyURL,
 	}
 }
 
