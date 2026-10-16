@@ -101,3 +101,31 @@ func TestRegisterGuardedRejectsDuplicate(t *testing.T) {
 		t.Fatal("Register must keep replace semantics")
 	}
 }
+
+func TestUnregister(t *testing.T) {
+	registry := NewRegistry()
+	cmd := DefineCommand("svc", nil)
+	if err := registry.RegisterGuarded(cmd); err != nil {
+		t.Fatalf("RegisterGuarded error = %v", err)
+	}
+	registry.Unregister("svc")
+	if _, ok := registry.Lookup("svc"); ok {
+		t.Fatal("unregistered command still resolves")
+	}
+	for _, name := range registry.Names() {
+		if name == "svc" {
+			t.Fatal("unregistered command still listed")
+		}
+	}
+	// 缺席时幂等
+	registry.Unregister("svc")
+	registry.Unregister("never-registered")
+	// 摘除后可重新注册同名（服务 remove 后再 add 的路径）
+	next := DefineCommand("svc", nil)
+	if err := registry.RegisterGuarded(next); err != nil {
+		t.Fatalf("re-register after Unregister error = %v", err)
+	}
+	if got, _ := registry.Lookup("svc"); got != next {
+		t.Fatal("re-registered binding must resolve to the new command")
+	}
+}

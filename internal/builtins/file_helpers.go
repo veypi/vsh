@@ -7,6 +7,8 @@ import (
 	stdfs "io/fs"
 	"os"
 	"path"
+
+	gbfs "github.com/veypi/vsh/fs"
 )
 
 func ensureParentDirExists(ctx context.Context, inv *Invocation, targetAbs string) error {
@@ -55,13 +57,9 @@ func copyFileContents(ctx context.Context, inv *Invocation, srcAbs, dstAbs strin
 }
 
 func writeFileContents(ctx context.Context, inv *Invocation, targetAbs string, data []byte, perm stdfs.FileMode) error {
-	if err := ensureParentDirExists(ctx, inv, targetAbs); err != nil {
-		return err
-	}
-
-	file, err := inv.FS.OpenFile(ctx, targetAbs, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	file, err := createFileForWrite(ctx, inv, targetAbs, perm)
 	if err != nil {
-		return &ExitError{Code: 1, Err: err}
+		return err
 	}
 	defer func() { _ = file.Close() }()
 
@@ -70,4 +68,19 @@ func writeFileContents(ctx context.Context, inv *Invocation, targetAbs string, d
 	}
 	recordFileMutation(inv.TraceRecorder(), "write", targetAbs, targetAbs, targetAbs)
 	return nil
+}
+
+// createFileForWrite 建好父目录并打开目标文件（O_CREATE|O_WRONLY|O_TRUNC）。
+// 调用方负责 Close，并可向返回的 writer 流式写入（curl -o 的落盘路径——
+// 响应体边收边写，不整块驻留内存）。
+func createFileForWrite(ctx context.Context, inv *Invocation, targetAbs string, perm stdfs.FileMode) (gbfs.File, error) {
+	if err := ensureParentDirExists(ctx, inv, targetAbs); err != nil {
+		return nil, err
+	}
+
+	file, err := inv.FS.OpenFile(ctx, targetAbs, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return nil, &ExitError{Code: 1, Err: err}
+	}
+	return file, nil
 }

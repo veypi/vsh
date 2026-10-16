@@ -93,6 +93,15 @@ func (r *Registry) RegisterLazy(name string, loader LazyCommandLoader) error {
 	return nil
 }
 
+// Unregister removes the command registered under name (no-op when absent).
+// In-flight invocations hold their own Command reference and complete
+// unaffected — removal only ends future lookups.
+func (r *Registry) Unregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.commands, name)
+}
+
 // Lookup returns the registered command for name.
 func (r *Registry) Lookup(name string) (Command, bool) {
 	r.mu.RLock()
