@@ -3,6 +3,30 @@
 本仓版本从 0.1.0 开始记录（0.1.0 之前的代码基础与归属见 README「来源与署名」）。
 版本号见 [VERSION](VERSION)，遵循 SemVer：破坏性变更进位 minor。
 
+## 0.3.1 — 2026-10-18
+
+### 新增
+
+- **curl 兼容旗标**：`-V/--version`（版本号跟随 vsh，见 `internal/vshversion`）、
+  `-N/--no-buffer`、`-D/--dump-header FILE`、`-k/--insecure`（新增
+  `network.Request.Insecure`，内置 transport 与 aic-pod NetClient 均生效）、
+  `--compressed`、`--retry NUM` / `--retry-delay SECS`；`--http1.1` / `--http2` /
+  `--http3` / `-g` / `--progress-bar` 作为兼容旗标接受（不再报 unknown option）。
+
+### 修复
+
+- **curl 无 `-o`/`-O` 时 stdout 也走流式投递**：此前整个响应体先读进内存再一次性
+  写出——SSE/长连接在连接结束前零字节（`| head` 这类管道也拿不到数据）。现在与
+  `-o` 同一条流式路径（`req.Sink`），每块写后立即 flush（有 `Flush()` 的 writer），
+  `-i` 头块与 `-v` 行按到达顺序输出。
+- **`-f` 在流式路径下不输出错误正文**（与真实 curl 一致）；`--retry` 只重试尚未写出
+  正文字节的传输错误与 408/429/500/502/503/504，被重试那次响应的正文与 `-i` 头块都丢弃。
+
+### 变更（破坏性）
+
+- **`curl -v` 的调试输出去 stderr**：此前混在 stdout 里，管道场景会污染正文。
+- `network.Request` 新增 `Insecure` 字段（忽略它的自定义 `network.Client` 实现行为不变）。
+
 ## 0.3.0 — 2026-10-16
 
 ### 新增

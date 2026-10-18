@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/veypi/vsh/network"
 )
@@ -127,6 +129,89 @@ func TestCurlWriteOutReportsStreamedSize(t *testing.T) {
 	}
 	if got, want := result.Stdout, strconv.Itoa(len(client.payload)); got != want {
 		t.Fatalf("Stdout = %q, want %q", got, want)
+	}
+}
+
+// notifyWriter 每次写入时发一次信号（不阻塞），用于断言字节在响应结束前
+// 就已到达 stdout。
+type notifyWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+	ch  chan struct{}
+}
+
+func (w *notifyWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	n, err := w.buf.Write(p)
+	w.mu.Unlock()
+	select {
+	case w.ch <- struct{}{}:
+	default:
+	}
+	return n, err
+}
+
+func (w *notifyWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// TestCurlStreamsStdoutBeforeResponseEnds：无 -o 时正文边收边出——响应体还没
+// 结束，stdout 就已经拿到首块（SSE 场景的回归点）。
+func TestCurlStreamsStdoutBeforeResponseEnds(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "data: first\n\n")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-release
+		_, _ = io.WriteString(w, "data: second\n\n")
+	}))
+	defer server.Close()
+	defer releaseAll()
+
+	session := newSession(t, &Config{Network: &NetworkConfig{AllowedURLPrefixes: []string{server.URL}}})
+	stdout := &notifyWriter{ch: make(chan struct{}, 16)}
+	done := make(chan *ExecutionResult, 1)
+	go func() {
+		result, err := session.Exec(context.Background(), &ExecutionRequest{
+			Script: "curl -sN " + server.URL + "/events\n",
+			Stdout: stdout,
+		})
+		if err != nil {
+			done <- nil
+			return
+		}
+		done <- result
+	}()
+
+	select {
+	case <-stdout.ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no stdout bytes before the response finished (body still buffered)")
+	}
+	if got := stdout.String(); !strings.Contains(got, "data: first") {
+		t.Fatalf("stdout = %q, want first event before the stream ends", got)
+	}
+
+	releaseAll()
+	result := <-done
+	if result == nil {
+		t.Fatal("Session.Exec() returned an error")
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0; stderr=%q", result.ExitCode, result.Stderr)
+	}
+	if got := stdout.String(); !strings.Contains(got, "data: second") {
+		t.Fatalf("stdout = %q, want the closing event", got)
 	}
 }
 

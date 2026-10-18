@@ -18,6 +18,7 @@ import (
 	"time"
 
 	gbfs "github.com/veypi/vsh/fs"
+	"github.com/veypi/vsh/internal/vshversion"
 	"github.com/veypi/vsh/network"
 )
 
@@ -47,6 +48,10 @@ type curlOptions struct {
 	url             string
 	proxy           string
 	proxySet        bool // 区分「未给 -x」与「-x "" 显式禁用代理」
+	insecure        bool
+	dumpHeader      string
+	retry           int
+	retryDelay      time.Duration
 }
 
 type curlFormField struct {
@@ -59,6 +64,11 @@ type curlFormField struct {
 const (
 	curlFormBoundary = "----CurlFormBoundaryjbgo"
 )
+
+// curlVersionText 与真实 curl 同构（首列后第一个词是版本号），版本号跟随 vsh。
+const curlVersionText = "curl " + vshversion.Version + " (vsh builtin)\n" +
+	"Protocols: http https\n" +
+	"Features: HTTP2\n"
 
 const curlHelpText = `usage: curl [OPTIONS] URL
 
@@ -88,7 +98,17 @@ const curlHelpText = `usage: curl [OPTIONS] URL
       --connect-timeout SECS accepted as an overall timeout fallback
   -x, --proxy URL            use proxy ([scheme://]host[:port]; empty disables; overrides env)
   -w, --write-out FMT        output format after completion
-  -v, --verbose              verbose output
+  -v, --verbose              verbose output (stderr)
+  -N, --no-buffer            disable output buffering (always on: writes flush per chunk)
+  -D, --dump-header FILE     write response headers to file
+  -k, --insecure             skip TLS certificate verification
+      --compressed           request a compressed response (gzip is transparent; br/zstd unsupported)
+      --retry NUM            retry transient failures (network error/408/429/5xx) up to NUM times
+      --retry-delay SECS     wait between retries (default 1)
+  -g, --globoff              accepted for compatibility (URLs are never globbed)
+      --http1.1/--http2/--http3 accepted for compatibility
+  -#, --progress-bar         accepted for compatibility (no progress meter)
+  -V, --version              show version and exit
       --help                 show this help
 `
 
@@ -135,7 +155,19 @@ func (c *Curl) Spec() CommandSpec {
 			{Name: "connect-timeout", Long: "connect-timeout", Arity: OptionRequiredValue, ValueName: "SECS", Help: "accepted as an overall timeout fallback"},
 			{Name: "proxy", Short: 'x', Long: "proxy", Arity: OptionRequiredValue, ValueName: "URL", Help: "use proxy ([scheme://]host[:port]; empty disables; overrides env)"},
 			{Name: "write-out", Short: 'w', Long: "write-out", Arity: OptionRequiredValue, ValueName: "FMT", Help: "output format after completion"},
-			{Name: "verbose", Short: 'v', Long: "verbose", Help: "verbose output"},
+			{Name: "verbose", Short: 'v', Long: "verbose", Help: "verbose output (stderr)"},
+			{Name: "no-buffer", Short: 'N', Long: "no-buffer", Help: "disable output buffering (always on)"},
+			{Name: "dump-header", Short: 'D', Long: "dump-header", Arity: OptionRequiredValue, ValueName: "FILE", Help: "write response headers to file"},
+			{Name: "insecure", Short: 'k', Long: "insecure", Help: "skip TLS certificate verification"},
+			{Name: "compressed", Long: "compressed", Help: "request a compressed response (gzip is transparent)"},
+			{Name: "retry", Long: "retry", Arity: OptionRequiredValue, ValueName: "NUM", Help: "retry transient failures up to NUM times"},
+			{Name: "retry-delay", Long: "retry-delay", Arity: OptionRequiredValue, ValueName: "SECS", Help: "wait between retries (default 1)"},
+			{Name: "globoff", Short: 'g', Long: "globoff", Help: "accepted for compatibility (URLs are never globbed)"},
+			{Name: "http1.1", Long: "http1.1", Help: "accepted for compatibility"},
+			{Name: "http2", Long: "http2", Help: "accepted for compatibility"},
+			{Name: "http3", Long: "http3", Help: "accepted for compatibility"},
+			{Name: "progress-bar", Short: '#', Long: "progress-bar", Help: "accepted for compatibility (no progress meter)"},
+			{Name: "version", Short: 'V', Long: "version", Help: "show version and exit"},
 			{Name: "help", Long: "help", Help: "show this help"},
 		},
 		Args: []ArgSpec{
@@ -179,6 +211,12 @@ func (c *Curl) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 	if matches.Has("help") {
 		return renderStaticHelp(curlHelpText)(inv.Stdout, c.Spec())
 	}
+	if matches.Has("version") {
+		if _, err := io.WriteString(inv.Stdout, curlVersionText); err != nil {
+			return &ExitError{Code: 1, Err: err}
+		}
+		return nil
+	}
 
 	opts, err := parseCurlMatches(matches)
 	if err != nil {
@@ -199,11 +237,12 @@ func (c *Curl) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 	}
 	headers := prepareCurlHeaders(opts, contentType)
 
-	// -o/-O：目标文件先建好，响应体走流式投递（边收边写，不整块驻留内存）。
+	// 输出目标：-o/-O 落盘，否则 stdout。两条路都走流式投递（-I 时正文写进
+	// sink 直接被丢弃）——SSE/长响应边收边出，不再攒到结束才吐字节。
 	var (
-		outFile   gbfs.File
-		outAbs    string
-		headerErr error
+		outFile gbfs.File
+		outAbs  string
+		out     io.Writer = inv.Stdout
 	)
 	if opts.outputFile != "" || opts.useRemoteName {
 		filename := opts.outputFile
@@ -215,6 +254,61 @@ func (c *Curl) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 		if err != nil {
 			return err
 		}
+		out = outFile
+	}
+	sink := newCurlSink(out)
+	sink.drop = opts.headOnly
+
+	// -D：头块按跳累积，结束时一次落盘（启动即截断，语义同真实 curl）。
+	var dumpBuf bytes.Buffer
+	dumpAbs := ""
+	if opts.dumpHeader != "" {
+		dumpAbs = gbfs.Resolve(inv.Cwd, opts.dumpHeader)
+	}
+
+	// -v 的调试流走 stderr（真实 curl 行为），管道里不会污染正文。
+	if opts.verbose {
+		var b strings.Builder
+		fmt.Fprintf(&b, "> %s %s\n", opts.method, requestURL)
+		curlWriteVerboseHeaders(&b, '>', headers)
+		b.WriteString(">\n")
+		_, _ = io.WriteString(inv.Stderr, b.String())
+	}
+
+	attempt := 0
+	retryPending := false
+	var headerErr error
+	// OnResponse 在响应头到达、正文写出之前回调：-D/-v/-i 的前缀都从这里按
+	// 到达顺序播出，与正文的流式写入保持先后关系。
+	onResponse := func(statusCode int, status string, respHeaders map[string]string) {
+		statusText := curlStatusTextOf(status, statusCode)
+		if opts.dumpHeader != "" {
+			fmt.Fprintf(&dumpBuf, "HTTP/1.1 %d %s\r\n", statusCode, statusText)
+			dumpBuf.WriteString(formatCurlHeaders(respHeaders))
+			dumpBuf.WriteString("\r\n\r\n")
+		}
+		if opts.verbose {
+			var b strings.Builder
+			fmt.Fprintf(&b, "< HTTP/1.1 %d %s\n", statusCode, statusText)
+			curlWriteVerboseHeaders(&b, '<', respHeaders)
+			b.WriteString("<\n")
+			_, _ = io.WriteString(inv.Stderr, b.String())
+		}
+		// 本次响应整块丢弃（要重试 / -f 失败）：连 -i 头块也不写，避免前缀重复。
+		if sink.body == 0 && attempt < opts.retry && curlRetryableStatus(statusCode) {
+			sink.drop = true
+			retryPending = true
+			return
+		}
+		if opts.failSilently && statusCode >= 400 {
+			sink.drop = true
+			return
+		}
+		if opts.includeHeaders || opts.headOnly {
+			if werr := sink.writeHead(fmt.Sprintf("HTTP/1.1 %d %s\r\n%s\r\n\r\n", statusCode, statusText, formatCurlHeaders(respHeaders))); werr != nil && headerErr == nil {
+				headerErr = werr
+			}
+		}
 	}
 
 	req := &network.Request{
@@ -225,31 +319,83 @@ func (c *Curl) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 		FollowRedirects: opts.followRedirects,
 		Timeout:         opts.timeout,
 		ProxyURL:        resolveCurlProxy(inv, requestURL, opts),
-	}
-	if outFile != nil {
-		req.Sink = outFile
-		if opts.includeHeaders {
-			// -i：头块先于正文落盘（与真实 curl 一致）——回调发生在响应头
-			// 到达、正文写出之前，此时才拿得到状态行与响应头。
-			req.OnResponse = func(statusCode int, status string, respHeaders map[string]string) {
-				if _, werr := fmt.Fprintf(outFile, "HTTP/1.1 %d %s\r\n", statusCode, curlStatusTextOf(status, statusCode)); werr != nil {
-					headerErr = werr
-					return
-				}
-				if _, werr := io.WriteString(outFile, formatCurlHeaders(respHeaders)+"\r\n\r\n"); werr != nil {
-					headerErr = werr
-				}
-			}
-		}
+		Insecure:        opts.insecure,
+		Sink:            sink,
+		OnResponse:      onResponse,
 	}
 
-	resp, err := inv.Fetch(ctx, req)
-	if err == nil && headerErr != nil {
-		err = headerErr
+	var resp *network.Response
+	for attempt = 0; ; attempt++ {
+		sink.drop = opts.headOnly
+		retryPending = false
+		resp, err = inv.Fetch(ctx, req)
+		if err == nil && headerErr != nil {
+			err = headerErr
+		}
+		if err != nil {
+			// 已经写出正文字节就不再重试（重试无法撤回已交付的数据）。
+			if sink.body > 0 || attempt >= opts.retry {
+				break
+			}
+			if !curlRetrySleep(ctx, opts) {
+				err = ctx.Err()
+				if err == nil {
+					err = context.Canceled
+				}
+				break
+			}
+			continue
+		}
+		if retryPending {
+			if !curlRetrySleep(ctx, opts) {
+				err = ctx.Err()
+				if err == nil {
+					err = context.Canceled
+				}
+				break
+			}
+			continue
+		}
+		// 非流式客户端不会回调 onResponse，重试判定得在收齐后补一次。
+		if !resp.Streamed && attempt < opts.retry && curlRetryableStatus(resp.StatusCode) {
+			if !curlRetrySleep(ctx, opts) {
+				err = ctx.Err()
+				if err == nil {
+					err = context.Canceled
+				}
+				break
+			}
+			continue
+		}
+		break
 	}
 	if err != nil {
+		writeCurlDump(ctx, inv, dumpAbs, dumpBuf.Bytes())
 		curlDiscardOutput(ctx, inv, outFile, outAbs)
 		return curlRequestError(inv, opts, err)
+	}
+
+	// 客户端未实现流式投递：头块与正文在响应收齐后一次补齐（顺序与流式一致）。
+	if !resp.Streamed {
+		statusText := curlStatusText(resp)
+		if opts.dumpHeader != "" {
+			fmt.Fprintf(&dumpBuf, "HTTP/1.1 %d %s\r\n", resp.StatusCode, statusText)
+			dumpBuf.WriteString(formatCurlHeaders(resp.Headers))
+			dumpBuf.WriteString("\r\n\r\n")
+		}
+		if opts.verbose {
+			var b strings.Builder
+			fmt.Fprintf(&b, "< HTTP/1.1 %d %s\n", resp.StatusCode, statusText)
+			curlWriteVerboseHeaders(&b, '<', resp.Headers)
+			b.WriteString("<\n")
+			_, _ = io.WriteString(inv.Stderr, b.String())
+		}
+		if !(opts.failSilently && resp.StatusCode >= 400) && (opts.includeHeaders || opts.headOnly) {
+			if werr := sink.writeHead(fmt.Sprintf("HTTP/1.1 %d %s\r\n%s\r\n\r\n", resp.StatusCode, statusText, formatCurlHeaders(resp.Headers))); werr != nil {
+				curlDiscardOutput(ctx, inv, outFile, outAbs)
+				return &ExitError{Code: 1, Err: werr}
+			}
+		}
 	}
 
 	if err := saveCurlCookies(ctx, inv, opts, resp); err != nil {
@@ -258,7 +404,8 @@ func (c *Curl) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 	}
 
 	if opts.failSilently && resp.StatusCode >= 400 {
-		// -f：失败不留输出文件（与 curl -f「不产生输出」一致）。
+		// -f：失败不留输出文件（与 curl -f「不产生输出」一致）；stdout 路径的
+		// 错误正文已在 onResponse 里被丢弃。
 		curlDiscardOutput(ctx, inv, outFile, outAbs)
 		if !opts.silent || opts.showError {
 			return exitf(inv, 22, "curl: (22) The requested URL returned error: %d", resp.StatusCode)
@@ -266,14 +413,14 @@ func (c *Curl) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 		return &ExitError{Code: 22}
 	}
 
-	if outFile != nil {
-		if !resp.Streamed {
-			// 客户端未实现流式投递：退化为整体写入（此时正文已在内存里）。
-			if _, werr := outFile.Write(curlOutputFileBody(opts, resp)); werr != nil {
-				curlDiscardOutput(ctx, inv, outFile, outAbs)
-				return &ExitError{Code: 1, Err: werr}
-			}
+	if !resp.Streamed && !opts.headOnly {
+		if _, werr := sink.Write(resp.Body); werr != nil {
+			curlDiscardOutput(ctx, inv, outFile, outAbs)
+			return &ExitError{Code: 1, Err: werr}
 		}
+	}
+
+	if outFile != nil {
 		if cerr := outFile.Close(); cerr != nil {
 			_ = inv.FS.Remove(ctx, outAbs, false)
 			return &ExitError{Code: 1, Err: cerr}
@@ -281,19 +428,14 @@ func (c *Curl) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 		recordFileMutation(inv.TraceRecorder(), "write", outAbs, outAbs, outAbs)
 	}
 
-	output := buildCurlOutput(opts, resp, requestURL)
-	if outFile != nil {
-		if !opts.verbose {
-			output.Reset()
-		}
-		if opts.writeOut != "" {
-			output.Reset()
-			output.WriteString(applyCurlWriteOut(opts.writeOut, resp))
-		}
+	if err := writeCurlDump(ctx, inv, dumpAbs, dumpBuf.Bytes()); err != nil {
+		return err
 	}
 
-	if _, err := inv.Stdout.Write(output.Bytes()); err != nil {
-		return &ExitError{Code: 1, Err: err}
+	if opts.writeOut != "" {
+		if _, werr := io.WriteString(inv.Stdout, applyCurlWriteOut(opts.writeOut, resp)); werr != nil {
+			return &ExitError{Code: 1, Err: werr}
+		}
 	}
 	return nil
 }
@@ -324,6 +466,9 @@ func parseCurlMatches(matches *ParsedCommand) (*curlOptions, error) {
 		"proxy":           matches.Values("proxy"),
 		"output":          matches.Values("output"),
 		"write-out":       matches.Values("write-out"),
+		"dump-header":     matches.Values("dump-header"),
+		"retry":           matches.Values("retry"),
+		"retry-delay":     matches.Values("retry-delay"),
 	}
 	indexes := make(map[string]int, len(values))
 
@@ -398,6 +543,21 @@ func parseCurlMatches(matches *ParsedCommand) (*curlOptions, error) {
 			opts.writeOut = value
 		case "verbose":
 			opts.verbose = true
+		case "no-buffer":
+			// 默认就是逐块写 + flush，-N 只是兼容旗标。
+		case "dump-header":
+			opts.dumpHeader = value
+		case "insecure":
+			opts.insecure = true
+		case "compressed":
+			// 不显式设 Accept-Encoding：Go transport 默认请求 gzip 并透明解压。
+		case "retry":
+			opts.retry = parseCurlCount(value)
+		case "retry-delay":
+			opts.retryDelay = parseCurlTimeout(value)
+		case "globoff", "http1.1", "http2", "http3", "progress-bar":
+			// 兼容旗标：URL 从不展开通配，协议版本由 transport 协同（h2 默认），
+			// 也没有进度条可关。
 		}
 	}
 
@@ -428,7 +588,7 @@ func splitCurlAttachedShort(arg string) (option, value string, ok bool) {
 		return "", "", false
 	}
 	switch arg[:2] {
-	case "-X", "-d", "-u", "-A", "-e", "-b", "-x":
+	case "-X", "-d", "-u", "-A", "-e", "-b", "-x", "-o", "-D":
 		return arg[:2], arg[2:], true
 	default:
 		return "", "", false
@@ -441,7 +601,8 @@ func curlMissingValueFallback(arg string) (fallback string, ok bool) {
 		return "GET", true
 	case "-H", "--header", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form",
 		"-u", "--user", "-A", "--user-agent", "-e", "--referer", "-b", "--cookie", "-c", "--cookie-jar",
-		"-T", "--upload-file", "-m", "--max-time", "--connect-timeout", "-x", "--proxy", "-o", "--output", "-w", "--write-out":
+		"-T", "--upload-file", "-m", "--max-time", "--connect-timeout", "-x", "--proxy", "-o", "--output", "-w", "--write-out",
+		"-D", "--dump-header", "--retry", "--retry-delay":
 		return "", true
 	default:
 		return "", false
@@ -708,48 +869,102 @@ func saveCurlCookies(ctx context.Context, inv *Invocation, opts *curlOptions, re
 	return writeFileContents(ctx, inv, gbfs.Resolve(inv.Cwd, opts.cookieJar), []byte(setCookie), 0o644)
 }
 
-func buildCurlOutput(opts *curlOptions, resp *network.Response, requestURL string) *bytes.Buffer {
-	var output bytes.Buffer
-
-	if opts.verbose {
-		fmt.Fprintf(&output, "> %s %s\n", opts.method, requestURL)
-		curlWriteVerboseHeaders(&output, '>', opts.headers)
-		output.WriteString(">\n")
-		fmt.Fprintf(&output, "< HTTP/1.1 %d %s\n", resp.StatusCode, curlStatusText(resp))
-		curlWriteVerboseHeaders(&output, '<', resp.Headers)
-		output.WriteString("<\n")
-	}
-
-	if opts.includeHeaders && !opts.verbose {
-		fmt.Fprintf(&output, "HTTP/1.1 %d %s\r\n", resp.StatusCode, curlStatusText(resp))
-		output.WriteString(formatCurlHeaders(resp.Headers))
-		output.WriteString("\r\n\r\n")
-	}
-
-	if !opts.headOnly {
-		output.Write(resp.Body)
-	} else if !opts.includeHeaders && !opts.verbose {
-		fmt.Fprintf(&output, "HTTP/1.1 %d %s\r\n", resp.StatusCode, curlStatusText(resp))
-		output.WriteString(formatCurlHeaders(resp.Headers))
-		output.WriteString("\r\n")
-	}
-
-	if opts.writeOut != "" {
-		output.WriteString(applyCurlWriteOut(opts.writeOut, resp))
-	}
-
-	return &output
+// curlSink 是 curl 的流式输出目标：正文逐块写入并立即 flush（-N 的语义就是
+// 默认行为，不再额外缓冲）；drop 用于丢弃整块响应（-I 的正文、-f 的错误正文、
+// 待重试的那一次响应），body 记录已交付的正文字节（重试判定用，头块不计入）。
+type curlSink struct {
+	w       io.Writer
+	flusher interface{ Flush() error }
+	drop    bool
+	body    int64
 }
 
-func curlWriteVerboseHeaders(buf *bytes.Buffer, prefix rune, headers map[string]string) {
+func newCurlSink(w io.Writer) *curlSink {
+	sink := &curlSink{w: w}
+	if flusher, ok := w.(interface{ Flush() error }); ok {
+		sink.flusher = flusher
+	}
+	return sink
+}
+
+func (s *curlSink) Write(p []byte) (int, error) {
+	if s.drop {
+		return len(p), nil
+	}
+	n, err := s.w.Write(p)
+	s.body += int64(n)
+	if err == nil {
+		s.flush()
+	}
+	return n, err
+}
+
+// writeHead 写 -i/-I 的头块（不计入 body，不影响重试判定）。
+func (s *curlSink) writeHead(block string) error {
+	if _, err := io.WriteString(s.w, block); err != nil {
+		return err
+	}
+	s.flush()
+	return nil
+}
+
+func (s *curlSink) flush() {
+	if s.flusher != nil {
+		_ = s.flusher.Flush()
+	}
+}
+
+func curlWriteVerboseHeaders(w io.Writer, prefix rune, headers map[string]string) {
 	keys := make([]string, 0, len(headers))
 	for name := range headers {
 		keys = append(keys, name)
 	}
 	sort.Strings(keys)
 	for _, name := range keys {
-		fmt.Fprintf(buf, "%c %s: %s\n", prefix, name, headers[name])
+		fmt.Fprintf(w, "%c %s: %s\n", prefix, name, headers[name])
 	}
+}
+
+// curlRetryableStatus 与真实 curl --retry 的默认可重试状态一致。
+func curlRetryableStatus(statusCode int) bool {
+	switch statusCode {
+	case 408, 429, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
+}
+
+// curlRetrySleep 等待下一次重试；ctx 结束时返回 false（调用方停止重试）。
+func curlRetrySleep(ctx context.Context, opts *curlOptions) bool {
+	delay := opts.retryDelay
+	if delay <= 0 {
+		delay = time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func parseCurlCount(value string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// writeCurlDump 落盘 -D 累积的头块；未指定 -D 时什么也不做。
+func writeCurlDump(ctx context.Context, inv *Invocation, abs string, data []byte) error {
+	if abs == "" {
+		return nil
+	}
+	return writeFileContents(ctx, inv, abs, data, 0o644)
 }
 
 func curlStatusText(resp *network.Response) string {
@@ -823,13 +1038,6 @@ func curlHeaderValue(headers map[string]string, name string) string {
 		}
 	}
 	return ""
-}
-
-func curlOutputFileBody(opts *curlOptions, resp *network.Response) []byte {
-	if opts.headOnly {
-		return nil
-	}
-	return resp.Body
 }
 
 // curlDownloadSize 已下载字节数：流式投递时为 BytesWritten（Body 为空），

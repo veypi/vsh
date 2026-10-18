@@ -27,6 +27,7 @@ func (c *curlStubClient) Do(ctx context.Context, req *network.Request) (*network
 		FollowRedirects: req.FollowRedirects,
 		Timeout:         req.Timeout,
 		ProxyURL:        req.ProxyURL,
+		Insecure:        req.Insecure,
 	}
 
 	c.mu.Lock()
@@ -60,6 +61,7 @@ func (c *curlStubClient) LastRequest() *network.Request {
 		FollowRedirects: last.FollowRedirects,
 		Timeout:         last.Timeout,
 		ProxyURL:        last.ProxyURL,
+		Insecure:        last.Insecure,
 	}
 }
 
@@ -293,16 +295,19 @@ func TestCurlVerboseAndHeadOutputMatchUpstreamShape(t *testing.T) {
 	if verbose.ExitCode != 0 {
 		t.Fatalf("verbose ExitCode = %d, want 0; stderr=%q", verbose.ExitCode, verbose.Stderr)
 	}
+	// -v 的调试流走 stderr（真实 curl 行为），stdout 只有正文。
 	for _, want := range []string{
 		"> GET https://api.example.com/test\n",
 		"> Accept: application/json\n",
 		"< HTTP/1.1 200 OK\n",
 		"< Content-Type: application/json\n",
-		`{"data":"test"}`,
 	} {
-		if !strings.Contains(verbose.Stdout, want) {
-			t.Fatalf("verbose stdout = %q, want %q", verbose.Stdout, want)
+		if !strings.Contains(verbose.Stderr, want) {
+			t.Fatalf("verbose stderr = %q, want %q", verbose.Stderr, want)
 		}
+	}
+	if got, want := verbose.Stdout, `{"data":"test"}`; got != want {
+		t.Fatalf("verbose stdout = %q, want body only %q", got, want)
 	}
 
 	head := mustExecSession(t, session,

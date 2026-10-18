@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -68,6 +69,9 @@ type Request struct {
 	// HTTP_PROXY/ALL_PROXY 解析填入，已规范化为带 scheme 的 URL）。仅在客户
 	// 端配置 UseProxy 时生效，否则被忽略。
 	ProxyURL string
+	// Insecure（可选）跳过 TLS 证书校验（curl -k/--insecure）。仅内置 transport
+	// 生效；WithDoer 注入的自定义实现需自行处理。
+	Insecure bool
 }
 
 type Response struct {
@@ -100,6 +104,8 @@ type HTTPClient struct {
 	cfg      resolvedConfig
 	doer     HTTPDoer
 	resolver Resolver
+	// 默认 doer 的 transport 引用：-k（Request.Insecure）按请求克隆用。
+	defaultTransport *http.Transport
 }
 
 type resolvedConfig struct {
@@ -218,22 +224,24 @@ func New(cfg *Config, opts ...Option) (*HTTPClient, error) {
 }
 
 func (c *HTTPClient) defaultDoer() HTTPDoer {
-	return &http.Client{
-		Transport: &http.Transport{
-			// 代理按请求从 ctx 取（Do 在 UseProxy 开启且 req.ProxyURL 非空时
-			// 注入）；不读进程环境变量——沙箱受控拨号，环境代理由 curl 从
-			// 会话 env 显式解析后经 Request.ProxyURL 传入。
-			Proxy: func(httpReq *http.Request) (*url.URL, error) {
-				proxyURL, _ := httpReq.Context().Value(requestProxyKey{}).(*url.URL)
-				return proxyURL, nil
-			},
-			DialContext:           c.dialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
+	transport := &http.Transport{
+		// 代理按请求从 ctx 取（Do 在 UseProxy 开启且 req.ProxyURL 非空时
+		// 注入）；不读进程环境变量——沙箱受控拨号，环境代理由 curl 从
+		// 会话 env 显式解析后经 Request.ProxyURL 传入。
+		Proxy: func(httpReq *http.Request) (*url.URL, error) {
+			proxyURL, _ := httpReq.Context().Value(requestProxyKey{}).(*url.URL)
+			return proxyURL, nil
 		},
+		DialContext:           c.dialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	c.defaultTransport = transport
+	return &http.Client{
+		Transport: transport,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -379,6 +387,21 @@ func (c *HTTPClient) Do(ctx context.Context, req *Request) (*Response, error) {
 		defer cancel()
 	}
 
+	// -k/--insecure：默认 doer 按请求克隆 transport 关掉证书校验；注入的
+	// 自定义 doer 自行处理该字段（本包不干预）。
+	doer := c.doer
+	if req.Insecure && c.defaultTransport != nil {
+		transport := c.defaultTransport.Clone()
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		defer transport.CloseIdleConnections()
+		doer = &http.Client{
+			Transport: transport,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	}
+
 	redirects := 0
 	for {
 		if err := c.checkURLAllowed(ctx, currentURL); err != nil {
@@ -400,7 +423,7 @@ func (c *HTTPClient) Do(ctx context.Context, req *Request) (*Response, error) {
 			httpReq.Header.Set(name, value)
 		}
 
-		resp, err := c.doer.Do(httpReq)
+		resp, err := doer.Do(httpReq)
 		if err != nil {
 			return nil, err
 		}
@@ -670,7 +693,8 @@ func ParseProxyURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-func isRedirect(statusCode int) bool {	switch statusCode {
+func isRedirect(statusCode int) bool {
+	switch statusCode {
 	case http.StatusMovedPermanently,
 		http.StatusFound,
 		http.StatusSeeOther,
