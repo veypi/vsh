@@ -514,6 +514,14 @@ func (e *exitStatus) fromHandlerError(err error) {
 	} else if errors.As(err, &es) {
 		e.err = err
 		e.code = uint8(es)
+	} else if commands.BrokenPipe(err) {
+		// 下游提前关闭（SIGPIPE）：可预期的正常终止，不是致命错误。
+		// 命令作者本该自己把它映射成 ExitError{141}（见 commands.BrokenPipe 的契约），
+		// 这里兜底：作者漏映射时，也不该把整段脚本打断、更不该让这条管道错误
+		// 把真正的失败原因（如管道右端命令不存在）盖住。
+		e.code = 141
+		e.err = nil
+		e.errExitIgnored = false
 	} else {
 		e.fatal(err) // handler's custom fatal error
 	}

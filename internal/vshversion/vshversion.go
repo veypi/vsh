@@ -5,4 +5,4 @@
 package vshversion
 
 // Version 是 vsh 的发布版本（与仓库根 VERSION 文件同步）。
-const Version = "0.3.1"
+const Version = "0.3.2"
