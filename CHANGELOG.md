@@ -3,9 +3,18 @@
 本仓版本从 0.1.0 开始记录（0.1.0 之前的代码基础与归属见 README「来源与署名」）。
 版本号见 [VERSION](VERSION)，遵循 SemVer：破坏性变更进位 minor。
 
-## 0.3.2 — 2026-10-22
+## 0.3.2 — 2026-10-24
 
 ### 修复
+
+- **身份键（UID/EUID）导出到命令可见环境**：此前 UID/EUID 只是只读 shell 变量，
+  不在「命令可见环境」（内建命令读的那份：`commands.NewInvocation` 的 Env ←
+  `invokeResolvedCommand` 的 currentEnv）里，内建读不到就回落默认虚拟身份
+  （1000）。在真实属主不是 1000 的设备上（如 macOS 桌面用户 uid=501），按 POSIX
+  权限档判定的内建会因属主档落空而落 group 档，把属主可写的目录误判为不可写
+  ——典型症状：0755 目录里内建 `mv` 报 `Permission denied`，而同一目录里原生
+  `/bin/mv` 正常、`cp`/`rm` 也正常（不涉 rename 权限档）。现在 UID/EUID 同时是
+  只读变量与导出值：内建拿到真实身份，脚本仍改不动（`export UID=…` 报 readonly）。
 
 - **解释器把断管（EPIPE）兜底收成 141，不再当致命错误**：注册命令写 stdout 时
   下游已关闭（`| head` 提前退出、管道右端命令不存在），若命令把裸 error 返回上来

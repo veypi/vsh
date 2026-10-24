@@ -1339,14 +1339,23 @@ func (r *Runner) Reset() {
 	if !r.writeEnv.Get("OSTYPE").Declared() {
 		r.setVarString("OSTYPE", r.defaultOSType())
 	}
+	// 身份键必须「只读 + 导出」：内建命令读的是命令可见环境
+	//（commands.NewInvocation 的 Env ← invokeResolvedCommand 的 currentEnv），
+	//UID/EUID 缺失时 vsh 回落默认虚拟身份（1000）。在真实属主不是 1000 的设备上
+	//（macOS 桌面用户 uid=501），按 POSIX 权限档判定的内建会落 group 档而不是
+	// 属主档，把属主可写的目录误判为不可写（0755 目录里内建 mv 报 Permission
+	// denied，而原生 /bin/mv 正常）。
+	// 只读保持：脚本改不动（export UID=… 报 readonly），派发时环境带的是可信值。
 	r.setVar("UID", expand.Variable{
 		Set:      true,
+		Exported: true,
 		Kind:     expand.String,
 		ReadOnly: true,
 		Str:      strconv.Itoa(r.uid),
 	})
 	r.setVar("EUID", expand.Variable{
 		Set:      true,
+		Exported: true,
 		Kind:     expand.String,
 		ReadOnly: true,
 		Str:      strconv.Itoa(r.euid),
