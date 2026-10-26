@@ -3,6 +3,38 @@
 本仓版本从 0.1.0 开始记录（0.1.0 之前的代码基础与归属见 README「来源与署名」）。
 版本号见 [VERSION](VERSION)，遵循 SemVer：破坏性变更进位 minor。
 
+## 0.3.3 — 2026-10-27
+
+### 破坏性接口调整
+
+- **命令准入统一为 `Policy.AllowExec(ExecRequest)`**：取代 `AllowCommand` /
+  `AllowBuiltin`；一次请求携带名称、解析路径、来源（registry / builtin / path 等）、
+  argv 与工作目录。注册命令、解释器内建与包装内建调用走同一入口，准入判定移到
+  分发前，`Internal` 内部调用不再绕过。`policy.Config.AllowedBuiltins` 删除，
+  允许列表只剩 `AllowedCommands`（按名称或解析路径命中）。
+- **可执行文件改由 `commands.FileCommandResolver` 构造普通命令**：
+  `Config.NativeExec` / `WithNativeExec` 移除，新增 `Config.FileCommands` /
+  `WithFileCommandResolver`。解析器只构造命令、不执行文件也不产生副作用，返回
+  `(nil, nil)` 表示无实现；构造出的命令与其他命令同走 `AllowExec`，无 shebang 的
+  二进制不再由 shell 直接原生执行。
+- 默认静态策略的允许列表并入解释器内建命令（新增
+  `commands.ShellBuiltinNames()`）；含 `/` 的命令名同样先查注册表，注册实现优先于
+  文件解析。
+
+### 修复
+
+- **shellpattern 不再因坏表达式 panic**：`ExtendedPatternMatcher` 用
+  `regexp.Compile` 取代 `MustCompile`，编译失败返回错误并保留递归匹配回落；
+  非法 UTF-8 模式不再进入 regexp 路径（`Filenames` 模式也不例外）；
+  `regexpNext` 的多字节判定修正为 `c >= utf8.RuneSelf`。
+
+### 文档
+
+- 统一文档架构：`SPEC.md` → `docs/reference/spec.md`、`THREAT_MODEL.md` →
+  `docs/reference/threat-model.md`、`TODO.md` → `docs/development/todo.md`，
+  新增 [docs/index.md](docs/index.md) 文档地图；README / README.en / AGENTS /
+  SECURITY 与 `internal/shell/docs_prune_test.go` 的引用同步。
+
 ## 0.3.2 — 2026-10-24
 
 ### 修复

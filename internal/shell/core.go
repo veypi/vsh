@@ -55,7 +55,7 @@ type Execution struct {
 	HostPlatform       host.Platform
 	HostProcessMeta    host.ExecutionMeta
 	NewPipe            func() (io.ReadCloser, io.WriteCloser, error)
-	NativeExec         func(context.Context, string, *commands.Invocation) error
+	FileCommands       commands.FileCommandResolver
 	CompletionState    *shellstate.CompletionState
 	Stdin              io.Reader
 	Stdout             io.Writer
@@ -655,12 +655,22 @@ func (m *core) callHandler(exec *Execution, budget *executionBudget) interp.Call
 		}
 
 		if hc.IsBuiltin(args[0]) {
-			if err := allowBuiltin(ctx, exec.Policy, args[0], args); err != nil {
+			if err := allowExec(ctx, exec.Policy, policy.ExecRequest{
+				Name:    args[0],
+				Source:  "builtin",
+				Argv:    args,
+				WorkDir: hc.Dir,
+			}); err != nil {
 				recordPolicyDenied(exec.Trace, err, "", "", args[0], "builtin")
 				return nil, shellFailure(ctx, 126, "%v", err)
 			}
 			for _, invocation := range wrappedBuiltinInvocations(hc, args) {
-				if err := allowBuiltin(ctx, exec.Policy, invocation.name, invocation.argv); err != nil {
+				if err := allowExec(ctx, exec.Policy, policy.ExecRequest{
+					Name:    invocation.name,
+					Source:  "builtin",
+					Argv:    invocation.argv,
+					WorkDir: hc.Dir,
+				}); err != nil {
 					recordPolicyDenied(exec.Trace, err, "", "", invocation.name, "builtin")
 					return nil, shellFailure(ctx, 126, "%v", err)
 				}
@@ -937,18 +947,12 @@ func mergeEnv(base, override map[string]string) map[string]string {
 	return out
 }
 
-func allowCommand(ctx context.Context, pol policy.Policy, name string, argv []string) error {
+func allowExec(ctx context.Context, pol policy.Policy, req policy.ExecRequest) error {
 	if pol == nil {
 		return nil
 	}
-	return pol.AllowCommand(ctx, name, argv)
-}
-
-func allowBuiltin(ctx context.Context, pol policy.Policy, name string, argv []string) error {
-	if pol == nil {
-		return nil
-	}
-	return pol.AllowBuiltin(ctx, name, argv)
+	req.Argv = append([]string(nil), req.Argv...)
+	return pol.AllowExec(ctx, req)
 }
 
 func allowPath(ctx context.Context, pol policy.Policy, fsys gbfs.FileSystem, action policy.FileAction, name string) error {
@@ -1105,6 +1109,13 @@ func lookupCommand(ctx context.Context, exec *Execution, dir string, env expand.
 		}, true, nil
 	}
 	if strings.Contains(name, "/") {
+		if cmd, ok := lookupRegistryCommand(exec, name); ok {
+			return &resolvedCommand{
+				command: cmd,
+				name:    name,
+				source:  "registry",
+			}, true, nil
+		}
 		locations, lookupErr := commandLookup(exec)(ctx, commands.CommandLookupRequest{Name: name, Env: envMap(env), WorkDir: dir, FilesOnly: true})
 		if lookupErr == nil && len(locations) > 0 {
 			return lookupCommandPath(ctx, exec, dir, locations[0].Path, "path", name)
@@ -1265,7 +1276,7 @@ func commandLookup(exec *Execution) commands.LookupCommandFunc {
 	return func(ctx context.Context, req commands.CommandLookupRequest) ([]commands.CommandLocation, error) {
 		var found []commands.CommandLocation
 		req.Name = commandutil.CommandPath(req.Name, exec.HostPlatform)
-		if !req.FilesOnly && !strings.Contains(req.Name, "/") {
+		if !req.FilesOnly {
 			if _, ok := lookupRegistryCommand(exec, req.Name); ok {
 				found = append(found, commands.CommandLocation{Name: req.Name})
 				if !req.All {
@@ -1296,7 +1307,7 @@ type shebangResolution struct {
 	interpreter string
 	batsRunner  bool
 	// binary 表示文件首行含 NUL 字节，即二进制可执行文件（不是 shell 脚本）。
-	// 无 shebang 的二进制文件不走脚本解释器，改经显式路径原生适配执行。
+	// 无 shebang 的二进制文件由调用方解析器构造普通命令，不在此执行。
 	binary bool
 }
 
@@ -1379,11 +1390,23 @@ func resolveCommandFile(ctx context.Context, exec *Execution, fullPath string, m
 		return nil, false, err
 	}
 	if shebang.binary {
-		if exec.NativeExec == nil {
-			return nil, false, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: native execution unavailable", fullPath)
+		if exec.FileCommands == nil {
+			return nil, false, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: command implementation unavailable", fullPath)
 		}
-		cmd := commands.DefineCommand(path.Base(fullPath), func(ctx context.Context, inv *commands.Invocation) error { return exec.NativeExec(ctx, fullPath, inv) })
-		return &resolvedCommand{command: cmd, name: path.Base(fullPath), path: fullPath, source: "native-path"}, true, nil
+		cmd, err := exec.FileCommands.ResolveFileCommand(ctx, commands.FileCommandRequest{
+			Path:        fullPath,
+			InvokedName: invokedPath,
+		})
+		if err != nil {
+			return nil, false, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: %v", fullPath, err)
+		}
+		if cmd == nil {
+			return nil, false, shellFailureToWriter(ctx, handlerState(ctx, exec).Stderr, 126, "%s: command implementation unavailable", fullPath)
+		}
+		if cmd.Name() == "" {
+			return nil, false, fmt.Errorf("vsh: file command resolver returned an unnamed command for %s", fullPath)
+		}
+		return &resolvedCommand{command: cmd, name: cmd.Name(), path: fullPath}, true, nil
 	}
 
 	if shebangOk {

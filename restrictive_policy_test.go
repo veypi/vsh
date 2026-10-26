@@ -8,10 +8,12 @@ import (
 	"github.com/veypi/vsh/policy"
 )
 
-func restrictivePolicy(allowedCommands, allowedBuiltins []string) policy.Policy {
+func restrictivePolicy(allowedCommands, additionalCommands []string) policy.Policy {
+	combined := append([]string(nil), allowedCommands...)
+	combined = append(combined, additionalCommands...)
+	combined = append(combined, "echo")
 	return policy.NewStatic(&policy.Config{
-		AllowedCommands: allowedCommands,
-		AllowedBuiltins: append(allowedBuiltins, "echo"),
+		AllowedCommands: combined,
 		ReadRoots:       []string{defaultHomeDir, "/usr/bin", "/bin"},
 		WriteRoots:      []string{defaultHomeDir},
 		Limits: policy.Limits{
@@ -37,8 +39,8 @@ func TestRestrictivePolicyDeniesEvalBuiltin(t *testing.T) {
 	if result.ExitCode != 126 {
 		t.Fatalf("ExitCode = %d, want 126; stderr=%q", result.ExitCode, result.Stderr)
 	}
-	if !strings.Contains(result.Stderr, `builtin "eval" denied`) {
-		t.Fatalf("Stderr = %q, want builtin eval denial", result.Stderr)
+	if !strings.Contains(result.Stderr, `command "eval" denied`) {
+		t.Fatalf("Stderr = %q, want eval denial", result.Stderr)
 	}
 }
 
@@ -53,7 +55,7 @@ func TestRestrictivePolicyDeniesSourceBuiltin(t *testing.T) {
 	if result.ExitCode != 126 {
 		t.Fatalf("ExitCode = %d, want 126; stderr=%q", result.ExitCode, result.Stderr)
 	}
-	if !strings.Contains(result.Stderr, `builtin "source" denied`) {
+	if !strings.Contains(result.Stderr, `command "source" denied`) {
 		t.Fatalf("Stderr = %q, want builtin source denial", result.Stderr)
 	}
 }
@@ -133,8 +135,8 @@ func TestRestrictivePolicyBuiltinBuiltinCannotBypassBuiltinAllowlist(t *testing.
 	if result.ExitCode != 126 {
 		t.Fatalf("ExitCode = %d, want 126; stderr=%q", result.ExitCode, result.Stderr)
 	}
-	if !strings.Contains(result.Stderr, `builtin "eval" denied`) {
-		t.Fatalf("Stderr = %q, want builtin eval denial", result.Stderr)
+	if !strings.Contains(result.Stderr, `command "eval" denied`) {
+		t.Fatalf("Stderr = %q, want eval denial", result.Stderr)
 	}
 }
 
@@ -153,7 +155,7 @@ func TestRestrictivePolicyDeepBuiltinWrapperChainStillChecksInnerBuiltin(t *test
 	if result.ExitCode != 126 {
 		t.Fatalf("ExitCode = %d, want 126; stderr=%q", result.ExitCode, result.Stderr)
 	}
-	if !strings.Contains(result.Stderr, `builtin "eval" denied`) {
+	if !strings.Contains(result.Stderr, `command "eval" denied`) {
 		t.Fatalf("Stderr = %q, want deep wrapper eval denial", result.Stderr)
 	}
 }
@@ -173,7 +175,7 @@ func TestRestrictivePolicyCommandBuiltinCannotBypassBuiltinAllowlist(t *testing.
 	if result.ExitCode != 126 {
 		t.Fatalf("ExitCode = %d, want 126; stderr=%q", result.ExitCode, result.Stderr)
 	}
-	if !strings.Contains(result.Stderr, `builtin "eval" denied`) {
+	if !strings.Contains(result.Stderr, `command "eval" denied`) {
 		t.Fatalf("Stderr = %q, want command-wrapped eval denial", result.Stderr)
 	}
 }

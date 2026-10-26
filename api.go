@@ -100,8 +100,9 @@ type Config struct {
 	// applies to both non-interactive and interactive shell execution.
 	AnalysisObserver analysis.Observer
 
-	// NativeExec executes an already resolved real file. Nil disables native execution.
-	NativeExec func(context.Context, string, *commands.Invocation) error
+	// FileCommands constructs regular commands for resolved executable files.
+	// Nil leaves executable files without a command implementation.
+	FileCommands commands.FileCommandResolver
 }
 
 // Option mutates a [Config] before [New] constructs the runtime.
@@ -154,8 +155,10 @@ func New(opts ...Option) (*Runtime, error) {
 		MaxFileBytes:         8 << 20,
 	}, cfg.LimitOverrides)
 	if cfg.Policy == nil {
+		allowedCommands := append([]string(nil), cfg.Registry.Names()...)
+		allowedCommands = append(allowedCommands, commands.ShellBuiltinNames()...)
 		cfg.Policy = policy.NewStatic(&policy.Config{
-			AllowedCommands: cfg.Registry.Names(),
+			AllowedCommands: allowedCommands,
 			ReadRoots:       []string{"/"},
 			WriteRoots:      []string{"/"},
 			Limits:          defaultLimits,

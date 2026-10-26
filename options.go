@@ -1,7 +1,6 @@
 package vsh
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -60,8 +59,8 @@ func WithConfig(cfg *Config) Option {
 		if cfg.AnalysisObserver != nil {
 			target.AnalysisObserver = cfg.AnalysisObserver
 		}
-		if cfg.NativeExec != nil {
-			target.NativeExec = cfg.NativeExec
+		if cfg.FileCommands != nil {
+			target.FileCommands = cfg.FileCommands
 		}
 		return nil
 	}
@@ -141,9 +140,9 @@ func WithBaseEnv(env map[string]string) Option {
 	}
 }
 
-// WithNativeExec enables an embedder-owned native executor for resolved files.
-func WithNativeExec(run func(context.Context, string, *commands.Invocation) error) Option {
-	return func(target *Config) error { target.NativeExec = run; return nil }
+// WithFileCommandResolver installs the resolver for executable-file commands.
+func WithFileCommandResolver(resolver commands.FileCommandResolver) Option {
+	return func(target *Config) error { target.FileCommands = resolver; return nil }
 }
 
 // WithHost replaces the host adapter used by the runtime.

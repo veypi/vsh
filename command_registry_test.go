@@ -57,16 +57,22 @@ func TestCustomFactoryHasNoLayoutSideEffects(t *testing.T) {
 	}
 }
 
-func TestExplicitPathAndNativeBoundary(t *testing.T) {
+func TestExplicitPathAndFileCommandBoundary(t *testing.T) {
 	calls := 0
-	session := newSession(t, &Config{Policy: policy.NewStatic(&policy.Config{ReadRoots: []string{"/"}, WriteRoots: []string{"/"}}), NativeExec: func(_ context.Context, p string, inv *commands.Invocation) error {
-		calls++
-		if p != "/opt/probe" {
-			t.Fatalf("path=%q", p)
-		}
-		_, err := io.WriteString(inv.Stdout, strings.Join(inv.Args, "|"))
-		return err
-	}})
+	resolver := commands.FileCommandResolverFunc(func(_ context.Context, req commands.FileCommandRequest) (commands.Command, error) {
+		return commands.DefineCommand("probe", func(_ context.Context, inv *commands.Invocation) error {
+			calls++
+			if req.Path != "/opt/probe" {
+				t.Fatalf("path=%q", req.Path)
+			}
+			_, err := io.WriteString(inv.Stdout, strings.Join(inv.Args, "|"))
+			return err
+		}), nil
+	})
+	session := newSession(t, &Config{
+		Policy:       policy.NewStatic(&policy.Config{ReadRoots: []string{"/"}, WriteRoots: []string{"/"}}),
+		FileCommands: resolver,
+	})
 	if err := session.FileSystem().MkdirAll(context.Background(), "/opt", 0755); err != nil {
 		t.Fatal(err)
 	}

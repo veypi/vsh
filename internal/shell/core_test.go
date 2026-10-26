@@ -737,7 +737,7 @@ func TestCoreRunBuiltinDoubleDashHonorsBuiltinPolicy(t *testing.T) {
 	_, err := Run(context.Background(), &Execution{
 		Script: "builtin -- false\n",
 		Policy: policy.NewStatic(&policy.Config{
-			AllowedBuiltins: []string{"builtin"},
+			AllowedCommands: []string{"builtin"},
 		}),
 		Stderr: &stderr,
 	})
@@ -748,7 +748,7 @@ func TestCoreRunBuiltinDoubleDashHonorsBuiltinPolicy(t *testing.T) {
 	if status != 126 {
 		t.Fatalf("exit status = %d, want 126", status)
 	}
-	if got := stderr.String(); !strings.Contains(got, `builtin "false" denied: not in allowlist`) {
+	if got := stderr.String(); !strings.Contains(got, `command "false" denied: not in allowlist`) {
 		t.Fatalf("stderr = %q, want false policy denial", got)
 	}
 }
@@ -1568,8 +1568,8 @@ func TestCoreRunStatefulBuiltinStaysInterpreted(t *testing.T) {
 	}
 }
 
-// Explicit binary files use only the injected NativeExec callback.
-func TestCoreRunExplicitBinaryPathUsesNativeExec(t *testing.T) {
+// Explicit binary files use a resolver-produced regular command.
+func TestCoreRunExplicitBinaryPathUsesFileCommandResolver(t *testing.T) {
 	t.Parallel()
 
 	registry := newShellTestRegistry(t)
@@ -1581,10 +1581,12 @@ func TestCoreRunExplicitBinaryPathUsesNativeExec(t *testing.T) {
 	_, err := Run(context.Background(), &Execution{
 		Script:   "/opt/tool a1 b2\n",
 		Registry: registry,
-		NativeExec: func(ctx context.Context, p string, inv *commands.Invocation) error {
-			_, err := io.WriteString(inv.Stdout, "synthetic:"+p+"|"+strings.Join(inv.Args, " ")+"\n")
-			return err
-		},
+		FileCommands: commands.FileCommandResolverFunc(func(_ context.Context, req commands.FileCommandRequest) (commands.Command, error) {
+			return commands.DefineCommand("tool", func(_ context.Context, inv *commands.Invocation) error {
+				_, err := io.WriteString(inv.Stdout, "synthetic:"+req.Path+"|"+strings.Join(inv.Args, " ")+"\n")
+				return err
+			}), nil
+		}),
 		FS:     fsys,
 		Stdout: &stdout,
 		Stderr: &stderr,
@@ -1597,9 +1599,8 @@ func TestCoreRunExplicitBinaryPathUsesNativeExec(t *testing.T) {
 	}
 }
 
-// B 无原生能力端（registry 无对应路径命令）：二进制显式路径报 126
-// "native execution unavailable"，而非当脚本解释。
-func TestCoreRunExplicitBinaryPathWithoutNative(t *testing.T) {
+// 没有文件命令解析器时，二进制显式路径报 126，而非当脚本解释。
+func TestCoreRunExplicitBinaryPathWithoutFileCommandResolver(t *testing.T) {
 	t.Parallel()
 
 	fsys := newShellTestFS(t)
@@ -1618,7 +1619,7 @@ func TestCoreRunExplicitBinaryPathWithoutNative(t *testing.T) {
 	if !errors.As(err, &status) || status != 126 {
 		t.Fatalf("Run() error = %v, want exit status 126 (stderr=%q)", err, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "native execution unavailable") {
+	if !strings.Contains(stderr.String(), "command implementation unavailable") {
 		t.Fatalf("stderr = %q, want cannot-execute diagnostic", stderr.String())
 	}
 }

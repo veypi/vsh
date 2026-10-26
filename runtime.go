@@ -75,12 +75,8 @@ type limitOverridePolicy struct {
 	limits policy.Limits
 }
 
-func (p limitOverridePolicy) AllowCommand(ctx context.Context, name string, argv []string) error {
-	return p.base.AllowCommand(ctx, name, argv)
-}
-
-func (p limitOverridePolicy) AllowBuiltin(ctx context.Context, name string, argv []string) error {
-	return p.base.AllowBuiltin(ctx, name, argv)
+func (p limitOverridePolicy) AllowExec(ctx context.Context, req policy.ExecRequest) error {
+	return p.base.AllowExec(ctx, req)
 }
 
 func (p limitOverridePolicy) AllowPath(ctx context.Context, action policy.FileAction, target string) error {

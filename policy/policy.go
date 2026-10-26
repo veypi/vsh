@@ -40,9 +40,18 @@ type Limits struct {
 	MaxFileBytes         int64
 }
 
+// ExecRequest identifies one resolved command invocation. Fields are read-only
+// for policy implementations; Argv contains the original invocation arguments.
+type ExecRequest struct {
+	Name    string
+	Path    string
+	Source  string
+	Argv    []string
+	WorkDir string
+}
+
 type Policy interface {
-	AllowCommand(ctx context.Context, name string, argv []string) error
-	AllowBuiltin(ctx context.Context, name string, argv []string) error
+	AllowExec(ctx context.Context, req ExecRequest) error
 	AllowPath(ctx context.Context, action FileAction, target string) error
 	Limits() Limits
 	SymlinkMode() SymlinkMode
@@ -50,7 +59,6 @@ type Policy interface {
 
 type Config struct {
 	AllowedCommands []string
-	AllowedBuiltins []string
 	ReadRoots       []string
 	WriteRoots      []string
 	Limits          Limits
@@ -59,7 +67,6 @@ type Config struct {
 
 type Static struct {
 	allowedCommands []string
-	allowedBuiltins []string
 	readRoots       []string
 	writeRoots      []string
 	limits          Limits
@@ -86,7 +93,6 @@ func NewStatic(cfg *Config) *Static {
 
 	return &Static{
 		allowedCommands: normalizeNames(cfg.AllowedCommands),
-		allowedBuiltins: normalizeNames(cfg.AllowedBuiltins),
 		readRoots:       readRoots,
 		writeRoots:      writeRoots,
 		limits:          cfg.Limits,
@@ -94,32 +100,18 @@ func NewStatic(cfg *Config) *Static {
 	}
 }
 
-func (p *Static) AllowCommand(_ context.Context, name string, _ []string) error {
+func (p *Static) AllowExec(_ context.Context, req ExecRequest) error {
 	if len(p.allowedCommands) == 0 {
 		return nil
 	}
-
-	if slices.Contains(p.allowedCommands, name) {
+	if slices.Contains(p.allowedCommands, req.Name) {
 		return nil
 	}
-
+	if req.Path != "" && slices.Contains(p.allowedCommands, req.Path) {
+		return nil
+	}
 	return &DeniedError{
-		Subject: fmt.Sprintf("command %q", name),
-		Reason:  "not in allowlist",
-	}
-}
-
-func (p *Static) AllowBuiltin(_ context.Context, name string, _ []string) error {
-	if len(p.allowedBuiltins) == 0 {
-		return nil
-	}
-
-	if slices.Contains(p.allowedBuiltins, name) {
-		return nil
-	}
-
-	return &DeniedError{
-		Subject: fmt.Sprintf("builtin %q", name),
+		Subject: fmt.Sprintf("command %q", req.Name),
 		Reason:  "not in allowlist",
 	}
 }

@@ -12,7 +12,7 @@ command authors, work in `commands/`.
 ### command.go
 Defines the core command contract and invocation context.
 
-- `Command` — interface: `Name() string`, `Run(ctx, *Invocation) error`
+- `Command` — interface: `Name() string`, `Run(ctx, *Invocation) error`. This is the only command-implementation abstraction: Go builtins, lazy commands and external-program adapters all use the same runtime admission path. Implementation-specific policies belong inside the implementation; `exec_policy` admission happens before `Run`.
 - `CommandFunc` — function adapter for simple commands
 - `DefineCommand(name, fn)` — wraps a function as a `Command`
 - `Invocation` — runtime context: `Args`, `Env`, `Cwd`, `Stdin`/`Stdout`/`Stderr`, `FS`, `Fetch`, `Exec`, `Interact`, `Limits`

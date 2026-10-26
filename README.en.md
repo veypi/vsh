@@ -16,22 +16,28 @@ res, _ := sess.Exec(ctx, &vsh.ExecutionRequest{
 fmt.Print(res.Stdout)   // 3
 ```
 
-The execution contract lives in [SPEC.md](SPEC.md); the security model in
-[THREAT_MODEL.md](THREAT_MODEL.md) and [SECURITY.md](SECURITY.md); origin and attribution
+The execution contract lives in [docs/reference/spec.md](docs/reference/spec.md);
+future work lives in [docs/development/todo.md](docs/development/todo.md); the documentation
+map in [docs/index.md](docs/index.md); the security model in
+[docs/reference/threat-model.md](docs/reference/threat-model.md) and
+[SECURITY.md](SECURITY.md); origin and attribution
 at the end of this file.
 
 ## Highlights
 
 - **In-process execution**: `cat`, `ls`, `grep`, `sed`, `awk`… are Go implementations; the
-  host shell is never forked. When a real program is needed, the caller wires an explicit
-  native escape hatch (`WithNativeExec`) — there is none by default.
+  host shell is never forked. External-program capability is explicitly supplied by the caller
+  and absent by default. `WithFileCommandResolver` turns a resolved file into an ordinary
+  command implementation, which then passes through the same `AllowExec` gate as every other command.
 - **Every capability is injected**: command table (`WithRegistry`), filesystem
   (`WithFileSystem` / `WithWorkspace`), network (`WithNetworkClient` / `WithHTTPAccess`).
-  The engine implements shell semantics and knows nothing about approvals, users,
-  credentials or auditing.
-- **Sandboxed by default**: with no options you get an in-memory filesystem
+  The engine implements virtual-shell semantics and uniform command admission. It knows
+  nothing about approvals, users, credentials or auditing, and provides no OS/native-process
+  sandbox.
+- **Virtualized by default**: with no options you get an in-memory filesystem
   (`/home/agent`), built-in commands, a static policy and no network. Each `Session` owns
-  its state; execution is serial within a session and isolated between sessions.
+  its state; execution is serial within a session and isolated between sessions. These are
+  in-process virtual runtime boundaries, not a native-process isolation guarantee.
 - **Observable**: `WithTracing`, `WithLogger` and `WithAnalysisObserver` emit structured
   events.
 - **Quotaed**: command count, loop iterations, glob count, output size and more can be
@@ -106,7 +112,7 @@ vsh --root ./project --cwd /home/agent/project -c ls   # read-only mount + in-me
 vsh -i                                                 # interactive
 ```
 
-`vsh --help` lists the shell options and the sandbox filesystem options (`--root` mounts a
+`vsh --help` lists the shell options and the virtual filesystem options (`--root` mounts a
 host directory read-only with an in-memory overlay, `--readwrite-root` writes through to the
 host, `--inherit-env` passes selected host environment variables through). `cmd/vsh-gnu` is
 the harness used to run the GNU coreutils test suite against the built-ins.
@@ -115,11 +121,11 @@ the harness used to run the GNU coreutils test suite against the built-ins.
 
 | Option | Purpose |
 | --- | --- |
-| `WithRegistry` | Command table; bare-name lookup order = registry → real `PATH`, explicit paths hit files only |
+| `WithRegistry` | Command table; bare-name lookup order = registry → real `PATH`; an explicit path checks the identical registry key before files |
 | `WithFileSystem` / `WithWorkspace` / `WithWorkingDir` | Filesystem backend and the session's initial cwd |
 | `WithNetworkClient` / `WithNetwork` / `WithHTTPAccess` | Network egress and the allowed URL prefixes |
-| `WithPolicy` / `WithLimitOverrides` | Resource and command quotas |
-| `WithNativeExec` | Native process escape hatch: receives the resolved binary path only; sandboxing and permissions are the caller's call |
+| `WithPolicy` / `WithLimitOverrides` | Unified `AllowExec` admission, virtual-resource policy and quotas |
+| `WithFileCommandResolver` | Optional file-command resolver; constructs regular `commands.Command` values, while process isolation remains the caller implementation's responsibility |
 | `WithTracing` / `WithLogger` / `WithAnalysisObserver` | Structured events, logs, read-only semantic observation |
 | `WithBaseEnv` | Base environment for child processes |
 
@@ -158,12 +164,14 @@ custom commands (zstd), a harness overlay, OAuth network extensions, and more.
 
 ## Known limits
 
-- The target is a **bash-compatible subset**, not a full bash implementation; [SPEC.md](SPEC.md)
+- The target is a **bash-compatible subset**, not a full bash implementation; [docs/reference/spec.md](docs/reference/spec.md)
   is the contract.
-- No native execution by default: `ls` and friends run as built-ins; a real program is only
-  reachable when `WithNativeExec` is configured explicitly.
-- Registry hits take priority over `PATH`; explicit paths (`/bin/ls`) only touch real files
-  and never create or repair stub directories.
+- vsh is a virtual shell, not an OS/native-process sandbox. Any isolation required by an
+  external-program command must be supplied by its caller-provided implementation.
+- No external-program capability exists by default: `ls` and friends run as built-ins. A real
+  program requires both an explicitly configured file-command resolver and a policy that admits the command.
+- Registry hits take priority over `PATH`; an explicit path (`/bin/ls`) checks the identical
+  registry key before touching real files and never creates or repairs stub directories.
 - Execution within one session is serial; use several sessions for concurrency.
 - On Windows, paths and environment are normalized to the `/c/...` canonical form at the
   entry points and restored at the OS boundary; native semicolon `PATH` is not parsed.
@@ -251,7 +259,7 @@ This project began from an Apache-2.0 open-source shell runtime
 `88728c5a0618cf8d8278a6602ae9e1cf05a2159d`) and has since been **independently maintained and
 evolved** in this repository: it went through large-scale rewrites, pruning and original
 design (package and module layout, command registration and parsing, FS/network
-abstractions, sandbox boundaries, contrib modularization, an independent release process).
+abstractions, virtual runtime boundaries, contrib modularization, an independent release process).
 It no longer tracks upstream and promises neither compatibility nor regular rebases; security
 fixes are handled here as needed.
 
@@ -260,9 +268,3 @@ Upstream attribution and the license text live in [NOTICE](NOTICE) and [LICENSE]
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
-
-## Reference integration
-
-[aic-pod](https://github.com/veypi/aic-pod) embeds vsh in its own Go process to execute exec
-scripts, injecting only the platform commands, filesystem and native escape hatch available
-to that host.

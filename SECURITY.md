@@ -1,6 +1,6 @@
 # Security Policy
 
-支持面：darwin / linux / windows（见 [README](README.md)「平台支持」）；威胁模型与边界见 [THREAT_MODEL.md](THREAT_MODEL.md)。
+支持面：darwin / linux / windows（见 [README](README.md)「平台支持」）；威胁模型与边界见 [docs/reference/threat-model.md](docs/reference/threat-model.md)。
 
 ## Reporting a Vulnerability
 

@@ -327,7 +327,7 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 			c = sl.next()
 		}
 	default:
-		if c > utf8.RuneSelf {
+		if c >= utf8.RuneSelf {
 			sb.WriteByte(c)
 		} else {
 			sb.WriteString(regexp.QuoteMeta(string(c)))

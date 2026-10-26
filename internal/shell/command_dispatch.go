@@ -66,11 +66,17 @@ func (m *core) executeCommand(ctx context.Context, exec *Execution, req *command
 	}
 
 	start := time.Now().UTC()
+	if err := allowExec(ctx, exec.Policy, policy.ExecRequest{
+		Name:    resolved.name,
+		Path:    resolved.path,
+		Source:  resolved.source,
+		Argv:    req.Argv,
+		WorkDir: req.VirtualWD,
+	}); err != nil {
+		recordPolicyDenied(exec.Trace, err, "", resolved.path, resolved.name, resolved.source)
+		return req.CurrentEnv, shellFailureToWriter(ctx, req.Stderr, 126, "%v", err)
+	}
 	if !req.Internal {
-		if err := allowCommand(ctx, exec.Policy, resolved.name, req.Argv); err != nil {
-			recordPolicyDenied(exec.Trace, err, "", resolved.path, resolved.name, resolved.source)
-			return req.CurrentEnv, shellFailureToWriter(ctx, req.Stderr, 126, "%v", err)
-		}
 		if hc, ok := interp.LookupHandlerContext(ctx); ok && !strings.Contains(req.Argv[0], "/") && resolved.hashPath != "" {
 			if resolved.source != "path-cache" {
 				hc.RememberCommandHash(req.Argv[0], resolved.hashPath)

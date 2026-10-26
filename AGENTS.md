@@ -4,7 +4,7 @@ Notes for AI agents and contributors working **in this repository**. The user-fa
 overview is [README.md](README.md) (Chinese) / [README.en.md](README.en.md) (English).
 
 ## Project Overview
-`vsh` is a Go module for a deterministic, embeddable shell runtime. Optional heavyweight commands live in separate modules under `contrib/` (`awk`, `htmltomarkdown`, `jq`, `sqlite3`, `yq`, plus the experimental `nodejs` and the `extras` umbrella). Read `SPEC.md` before changing runtime boundaries or sandbox behavior.
+`vsh` is a Go module for a deterministic, embeddable virtual-shell runtime. It owns script parsing, command resolution, uniform command admission and virtual runtime resources; it does not provide an OS/process sandbox. Optional heavyweight commands live in separate modules under `contrib/` (`awk`, `htmltomarkdown`, `jq`, `sqlite3`, `yq`, plus the experimental `nodejs` and the `extras` umbrella). Read `docs/reference/spec.md` before changing runtime or command-policy boundaries.
 
 ## Build & Test
 Use Go 1.26+. 本仓不含上游的 Makefile、Nix flake 与 oracle 下载脚本。From this module run:
@@ -21,6 +21,9 @@ Before submitting or updating a PR, run `go vet ./...` and fix reported issues. 
 
 ## Key Project Rules
 - Unknown commands must never fall through to the host OS.
+- Every resolved command uses the same `exec_policy` admission point before its implementation runs. Do not add separate admission paths for builtins, registered commands or external-program adapters.
+- Command implementations hide their own execution details and implementation-specific policies; the shell runtime does not branch on those details.
+- vsh provides a virtual shell, not an OS sandbox. Do not claim that its in-process filesystem, network or resource controls isolate a native child process.
 - Match the registry pattern in `commands/` when adding new built-in commands.
 - For runtime changes, test exit codes, stdout/stderr, and sandboxed filesystem effects.
 - If a change touches shell semantics or policy, add a regression test in `runtime/` or the relevant package.
@@ -32,18 +35,25 @@ Before submitting or updating a PR, run `go vet ./...` and fix reported issues. 
 
 ## Docs & Language
 - `README.md` is **Chinese** and is the repo's main, human-facing entry point; `README.en.md` is the English mirror. Both open with a language switcher line and must be updated together when user-visible behavior changes.
-- `SPEC.md` is the product/architecture contract and stays Chinese; README links to it and to `THREAT_MODEL.md` / `SECURITY.md` as the normative docs.
+- Unified layout (shared across the ivec repos): READMEs, `CHANGELOG.md`, `AGENTS.md`,
+  `SECURITY.md` and `VERSION` at the root; everything else under `docs/` with
+  `docs/index.md` as the map and `architecture/` / `reference/` / `guides/` /
+  `development/` as the only categories.
+- `docs/reference/spec.md` is the product/architecture contract and stays Chinese; README
+  links to it and to `docs/reference/threat-model.md` / `SECURITY.md` as the normative docs.
+  Completed changes go to `CHANGELOG.md`; future plans only to `docs/development/todo.md`.
+- Keep documentation limited to the generic virtual-shell library. Do not document particular embedding products, process-sandbox libraries or their configuration domains here.
 - Keep the READMEs for users: what it is, highlights, install, quickstart, CLI, extension points, contrib table, known limits, platform matrix, testing, release, attribution, license. Editorial/internal detail (verification workflow, module traps, invariants) belongs in this file.
 - This library is **independently maintained**: do not reintroduce upstream/fork framing or a `FORK.md`. Attribution lives in the README's final "Origin and attribution" section plus `NOTICE` / `LICENSE`.
 
 ## SPEC Sync
-`SPEC.md` is the product and architecture contract. Update it in the same turn when:
+`docs/reference/spec.md` is the product and architecture contract. Update it in the same turn when:
 - adding/removing built-in commands
 - changing sandbox guarantees, policy defaults, or filesystem abstractions
 - changing the in-tree shell core integration strategy (`shell/`, `internal/shell/`)
 - expanding scope, roadmap, or introducing new public packages/interfaces
 
-Read the relevant `SPEC.md` sections before editing code, and update them once the design is clear. When in doubt, prefer a small SPEC update over silent drift.
+Read the relevant `docs/reference/spec.md` sections before editing code, and update them once the design is clear. When in doubt, prefer a small SPEC update over silent drift.
 
 ## Release & Versioning
 - Root module: tag `vX.Y.Z`, version in `VERSION`, changes in `CHANGELOG.md`.

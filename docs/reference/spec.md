@@ -1,14 +1,14 @@
 # vsh
 
-Status: 公开版架构契约，2026-10-07。
+Status: 现行架构契约，2026-10-27 修订；后续工作见 [TODO](../development/todo.md)。
 平台支持：darwin / linux / windows（支持面与其余平台的处理见 README 「平台支持」）。
 
-> 命令解析、FS 初始化和 NativeExec 以本文当前契约为准；来源与署名见 [README](README.md) 文末。
-> NativeExec 由 embedder 显式注入，默认关闭；未知名字永不直接交给宿主 OS。
+> vsh 是虚拟 shell：负责脚本语义、命令解析执行、统一命令准入和自身虚拟资源。
+> 它不提供 OS/原生进程沙箱。外部程序能力只能由调用方显式注入，默认关闭；未知名字永不直接交给宿主 OS。
 
 ## 1. Purpose
 
-`vsh` is a deterministic, policy-controlled, sandbox-only, bash-like runtime for AI agents.
+`vsh` is a deterministic, policy-controlled, virtual-shell, bash-like runtime for AI agents.
 
 It preserves the product idea behind Vercel's `just-bash` while making different implementation choices:
 
@@ -26,10 +26,11 @@ The target is not "Bash in Go". The target is a practical shell-shaped runtime f
 
 - it accepts shell-like scripts and command snippets
 - it evaluates a pragmatic subset of shell semantics
-- it runs inside the configured FS/policy boundary; optional NativeExec delegates real binaries to an explicit host adapter
+- it runs inside the configured virtual FS/policy boundary; external-program capability, when explicitly injected, is just another command implementation behind the same command-admission contract
 - it can expose structured traces and lifecycle logs for agent debugging and orchestration when the embedder opts in
-- it uses a virtual filesystem unless a caller explicitly installs another sandboxed backend
+- it uses a virtual filesystem unless a caller explicitly installs another virtualized backend
 - it never delegates unresolved names to the host
+- it does not claim or implement an OS/native-process sandbox
 
 The runtime is optimized for LLM and agent workloads:
 
@@ -46,11 +47,12 @@ The runtime is optimized for LLM and agent workloads:
 
 1. Port the `just-bash` concept to a Go-native runtime named `vsh`.
 2. Keep shell semantics, control flow, and interpreter behavior inside the project-owned shell core while exposing only the small public packages we intentionally support.
-3. Support only sandbox mode.
-4. Use explicit Go command implementations instead of host subprocesses.
+3. Keep all execution inside explicit virtual-shell capabilities, with no implicit host fallback.
+4. Resolve every invocation to one command instance and apply `exec_policy` uniformly before running its implementation.
 5. Default to an in-memory or otherwise virtualized filesystem.
 6. Expose deterministic observability hooks and execution results suitable for agent frameworks.
 7. Keep the implementation small, explicit, and easy to reason about.
+8. Leave OS/process isolation to caller-provided command implementations rather than claiming it as a vsh feature.
 
 ## 4. Non-Goals
 
@@ -59,6 +61,7 @@ The runtime is optimized for LLM and agent workloads:
 - implement full GNU Bash behavior
 - provide job control, readline-style history navigation/editing, or host TTY emulation
 - provide implicit host subprocess passthrough
+- provide an OS sandbox or determine how an external-program command implementation isolates host processes
 - support a user-facing compatibility mode as part of the default runtime contract
 - default to the host filesystem
 - silently emulate missing commands with host binaries
@@ -66,9 +69,9 @@ The runtime is optimized for LLM and agent workloads:
 
 ## 5. Design Principles
 
-### 5.1 Sandbox-only is a product decision
+### 5.1 Virtual-shell-only is a product decision
 
-There is no runtime mode where command execution falls back to `exec.Command`, `/bin/sh`, or `/bin/bash`. Unknown commands return a clear shell-style failure, typically exit status `127`.
+There is no runtime mode where unresolved command execution falls back to `exec.Command`, `/bin/sh`, or `/bin/bash`. Unknown commands return a clear shell-style failure, typically exit status `127`. A caller may explicitly provide an external-program command implementation, but vsh treats it exactly like any other command instance and makes no process-isolation claim.
 
 ### 5.2 The shell core owns shell semantics
 
@@ -513,11 +516,19 @@ type CommandRegistry interface {
     Names() []string
 }
 
+type ExecRequest struct {
+    Name    string
+    Path    string
+    Source  string
+    Argv    []string
+    WorkDir string
+}
+
 type Policy interface {
-    AllowCommand(ctx context.Context, name string, argv []string) error
-    AllowBuiltin(ctx context.Context, name string, argv []string) error
+    AllowExec(ctx context.Context, req ExecRequest) error
     AllowPath(ctx context.Context, action FileAction, path string) error
     Limits() Limits
+    SymlinkMode() SymlinkMode
 }
 
 type Event struct {
@@ -658,14 +669,13 @@ Responsibilities:
 
 ### 9.5 Call interception
 
-The runner call handler runs for every simple command, including builtins and functions. We use it for:
+The runner call handler observes simple commands before dispatch. We use it for:
 
 - recording expanded argv after shell expansion
-- enforcing builtin allow/deny policy
 - enforcing the per-execution command-count budget before dispatch
 - optionally canonicalizing argv in future features
 
-The call handler does not execute commands. It is a pre-execution interception point.
+The call handler does not execute commands. It admits shell builtins, including wrapped builtin invocations, because they do not enter the resolved-command dispatch in §9.6. These are two dispatch seams, not two policy implementations: both call the same `Policy.AllowExec`, and each command invocation is admitted exactly once.
 
 Implementation detail for the current runtime:
 
@@ -676,32 +686,36 @@ Implementation detail for the current runtime:
 - command substitution depth and glob-operation budgets are enforced from the shell-core compile pipeline, and glob-operation counts accumulate across all parsed chunks in one execution
 - request-level timeouts and caller cancellation are enforced via execution contexts and normalized into shell-style exit codes
 
-### 9.6 Command execution
+### 9.6 Command resolution and execution
 
-The runner exec handler is the command dispatch path for non-builtin, non-function calls.
+The current command contract has one implementation abstraction and one policy entry point. Builtins use the admission seam in §9.5; registry, lazy, file, shebang and caller-provided commands use the resolved-command seam below. A command's internal implementation does not change the `AllowExec` contract.
 
 Flow:
 
 1. receive expanded argv from the shell interpreter
-2. resolve bare `argv[0]` through the configured command registry first, then the command hash and current `PATH`; resolve explicit paths such as `/bin/ls` through the virtual filesystem
-3. if missing, write a shell-style error to stderr and return exit status `127`
-4. if present, run the Go command implementation
-5. convert command errors into shell exit status errors
-6. emit start/finish trace events when tracing is enabled
+2. resolve the invocation to one command instance through the configured shell and command resolvers
+3. if no command can be resolved, write a shell-style error to stderr and return exit status `127`
+4. evaluate `exec_policy` with the resolved command identity and invocation context
+5. if denied, return the command-admission error without invoking the implementation or producing its side effects
+6. if allowed, invoke the command through the shared command interface
+7. convert command errors into shell exit status errors and emit start/finish trace events when tracing is enabled
 
-This preserves shell syntax while making any native execution an explicit embedding decision.
+This contract applies identically to shell builtins exposed as commands, registry commands, lazy commands and caller-provided external-program command implementations. There is no separate native-command admission path.
 
 User-visible command lookup:
 
-- Interpreter semantics choose alias/function/builtin; stateful builtins exist only in the interpreter.
-- External bare names check Registry first, then real PATH files. Explicit paths select real files only. Windows command operands normalize to the Unix-shaped FS namespace; PATH remains a colon-separated list of normalized directories, while PATHEXT controls suffix search.
-- One injected-FS resolver serves execution, type, command -v, which, hash and nested calls. Registry hits do not need PATH, never enter the file hash and never fall through after rejection or failure.
+- Interpreter semantics choose alias/function/builtin; stateful builtins exist only in the interpreter. Every resolved command implementation still passes through the same `exec_policy` gate.
+- External bare names check Registry first, then caller-enabled real PATH resolvers. An explicit path first checks the identical Registry key, then caller-enabled file resolvers. None of these resolvers silently executes a host file.
+- Windows command operands normalize to the Unix-shaped FS namespace; PATH remains a colon-separated list of normalized directories, while PATHEXT controls suffix search.
+- One resolver surface serves execution, type, command -v, which, hash and nested calls. Registry hits do not need PATH, never enter the file hash and never fall through after rejection or failure.
 - `command -v` and `which` report registered names without a fake path; `type -t` reports `registered`; `type -P` searches only real files. Completion includes actual shell builtins, Registry and real files.
 - Real file hashes store resolved absolute paths; PATH assignment/unset and hash -r invalidate them. Relative PATH candidates are resolved against cwd before storage.
 - Executable text uses the supported shell shebang or default shell; non-shell explicit interpreters must resolve as real files. env shebangs preserve their options and use normal nested command resolution. Bats execution still reports unsupported.
-- Binary files call optional `NativeExec(ctx, resolvedPath, inv)`. The absolute resolved path is authoritative; the adapter cannot replace it by a second name/PATH lookup. No callback means status 126. Missing targets return 127; access/executable errors return 126; a started program's status is preserved.
-- Invocation.Exec accepts tokenized Command plus separate SearchEnv and Env. Argv0 changes presentation only, including the empty string; resolution, command rules and authorization still use Command[0]/resolved identity. `env`, `xargs`, `find -exec` and `timeout` share this entry point.
+- External-program capability is supplied only by an explicit caller-provided command implementation or resolver. The resolved absolute path remains authoritative inside that implementation; vsh neither performs a second host lookup nor provides process isolation. No such capability is installed by default.
+- Invocation.Exec accepts tokenized Command plus separate SearchEnv and Env. Argv0 changes presentation only, including the empty string; resolution and `exec_policy` still use Command[0]/resolved identity. `env`, `xargs`, `find -exec` and `timeout` share this entry point and re-enter the same admission path.
 - VSH_COMPAT_ROOT and VSH_COMPAT_PHYSICAL_PWD no longer remap runtime paths or override filesystem facts.
+
+`Config.FileCommands` and `WithFileCommandResolver` install the optional file-command resolver. It constructs a regular `commands.Command` from `FileCommandRequest{Path, InvokedName}`; returning nil means no implementation is available. Resolver errors and missing implementations fail explicitly, and command failures never trigger another resolution path.
 
 ## 10. Filesystem Model
 
@@ -774,12 +788,24 @@ Backend boundary for the current implementation:
 
 ## 12. Policy Model
 
-Policy is evaluated in-process and is mandatory.
+Policy is evaluated in-process as part of the virtual shell. It is not an OS/process-sandbox policy.
 
-Initial policy surface:
+### 12.1 Unified command admission
 
-- allowed command set
-- allowed builtin set
+`exec_policy` answers one question for every resolved command: may this command instance run in this invocation context?
+
+- It applies to every command implementation through either the builtin seam in §9.5 or the resolved-command seam in §9.6.
+- `policy.ExecRequest` carries the resolved `Name`, `Path`, `Source`, original `Argv` and `WorkDir`.
+- It does not inspect whether the implementation is a Go builtin, a registry command or an external-program adapter.
+- The static policy has only `AllowedCommands`: it matches `Name` or a non-empty resolved `Path`; an empty list leaves command admission open. There is no separate builtin allowlist.
+- A denial prevents `Command.Run` and all implementation side effects.
+- Nested execution resolves and admits each simple command again.
+- Command admission is separate from implementation-specific resource policies and from command-count/resource budgets.
+
+### 12.2 Virtual runtime policies
+
+The remaining policy surface belongs to the virtual shell itself:
+
 - allowed read roots
 - allowed write roots
 - stdout/stderr byte limits
@@ -790,12 +816,10 @@ Initial policy surface:
 - maximum glob operations
 - symlink policy
 - cancellation and timeout handling
-- network disabled unless a sandboxed network client is explicitly configured
+- network disabled unless a virtual network client is explicitly configured
 
-Default policy stance for MVP:
+Existing default resource limits remain unless separately revised:
 
-- command allowlist derived from the registered command set
-- builtin allowlist permissive for core shell features
 - reads and writes allowed inside `/`
 - maximum command count defaults to `10000` per execution
 - maximum loop iterations default to `10000` per loop
@@ -804,15 +828,10 @@ Default policy stance for MVP:
 - symlink traversal denied unless a filesystem backend and policy explicitly allow it
 - request-level timeout is opt-in, but when it fires the execution must stop with exit code `124`
 - caller-driven cancellation must stop the execution with exit code `130`
-- no ambient network access; `curl` is absent unless the runtime enables the sandboxed network client
+- no ambient network access; `curl` is absent unless the runtime enables the virtual network client
+- no external-program capability and no host fallback by default
 
-The policy package should be able to answer three questions:
-
-1. may this command run?
-2. may this builtin run?
-3. may this path be read or written?
-
-Network policy for the current runtime is enforced by the dedicated `network/` layer rather than by generic shell evaluation. Commands never receive host `http.Client` access directly; they only receive the runtime-owned sandboxed `network.Client`. The default sandboxed HTTP client must not inherit host proxy environment variables, and private-range blocking must be enforced during the actual dial using the same resolver surface used by the preflight URL check.
+Network policy for the current runtime is enforced by the dedicated `network/` layer rather than by generic shell evaluation. Commands never receive host `http.Client` access directly; they only receive the runtime-owned virtual `network.Client`. The default virtual HTTP client must not inherit host proxy environment variables, and private-range blocking must be enforced during the actual dial using the same resolver surface used by the preflight URL check. These controls govern only the virtual client and are not a sandbox claim for external processes.
 
 Path-policy enforcement rule for the current runtime:
 

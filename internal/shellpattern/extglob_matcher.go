@@ -14,8 +14,10 @@ import (
 // Match reports whether name matches pat under the supplied shell pattern mode.
 // It falls back to the recursive matcher for patterns or inputs containing
 // invalid UTF-8 bytes, since Go's regexp engine operates on UTF-8 code points.
+// A pattern with invalid UTF-8 must never reach the regexp path: the expression
+// built by [Regexp] would not be valid UTF-8 and compiling it would fail.
 func Match(pat, name string, mode Mode) (bool, error) {
-	if utf8.ValidString(pat) && utf8.ValidString(name) || mode&Filenames != 0 {
+	if utf8.ValidString(pat) && utf8.ValidString(name) {
 		matcher, err := ExtendedPatternMatcher(pat, mode)
 		if err != nil {
 			return false, err
@@ -50,8 +52,13 @@ func ExtendedPatternMatcher(pat string, mode Mode) (func(string) bool, error) {
 
 	expr, err := Regexp(pat, mode)
 	if err == nil {
-		rx := regexp.MustCompile(expr)
-		return rx.MatchString, nil
+		// 不用 MustCompile：表达式由字节级改写生成，此处出错只能返回错误，
+		// 不能让调用方（rg 等内置命令）把整个进程带走。
+		rx, compileErr := regexp.Compile(expr)
+		if compileErr == nil {
+			return rx.MatchString, nil
+		}
+		err = compileErr
 	}
 	var negErr *NegExtGlobError
 	if !errors.As(err, &negErr) {

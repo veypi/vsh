@@ -16,8 +16,8 @@ func TestDocsDoNotReferenceRemovedShellSeams(t *testing.T) {
 		"README.md",
 		"README.en.md",
 		"AGENTS.md",
-		"SPEC.md",
-		"THREAT_MODEL.md",
+		"docs/reference/spec.md",
+		"docs/reference/threat-model.md",
 		"api.go",
 	}
 	// website/ is pruned from this repository; walk it only when present.
