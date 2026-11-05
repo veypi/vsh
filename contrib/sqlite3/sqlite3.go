@@ -146,6 +146,11 @@ func (c *SQLite3) Run(ctx context.Context, inv *commands.Invocation) error {
 	}
 	defer func() { _ = conn.Close() }()
 
+	// 长查询可中断：ctx 取消（bg kill / exec 超时 / 断连）时打断正在执行的
+	// SQL（ncruces/go-sqlite3 原生支持）——与 awk 同类缺陷：此前长查询
+	// 不理会取消，只能等它自己跑完。
+	conn.SetInterrupt(ctx)
+
 	if err := configureSQLiteConn(conn, parsed.options.readonly); err != nil {
 		return &commands.ExitError{Code: 1, Err: err}
 	}

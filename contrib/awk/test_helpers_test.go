@@ -50,6 +50,8 @@ type awkCommandOptions struct {
 	Stdin string
 	Files map[string]string
 	Now   time.Time
+	// Ctx 覆盖执行上下文（默认 context.Background）——取消/超时路径的测试用。
+	Ctx context.Context
 }
 
 type awkCommandResult struct {
@@ -97,7 +99,11 @@ func runAWKCommand(tb testing.TB, opts *awkCommandOptions) awkCommandResult {
 		invOpts.Now = func() time.Time { return fixedNow }
 	}
 
-	err := NewAWK().Run(context.Background(), commands.NewInvocation(invOpts))
+	ctx := opts.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err := NewAWK().Run(ctx, commands.NewInvocation(invOpts))
 	result := awkCommandResult{
 		Stdout: stdout.String(),
 		Stderr: stderr.String(),

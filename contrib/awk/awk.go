@@ -3,6 +3,7 @@ package awk
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -94,26 +95,69 @@ func (c *AWK) Run(ctx context.Context, inv *commands.Invocation) error {
 
 	stdin := newLazyAWKStdin(ctx, inv)
 
+	// 进展计数（读入字节 + 写出字节）：停滞检测的信号，见 stall.go。
+	prog := &progressCounter{}
+	fileOpener := newAWKFileOpener(ctx, inv, stdin)
+	fileWriter := newAWKFileWriter(ctx, inv)
+	pipeReader := newAWKPipeReader(ctx, inv)
+
 	config := &interp.Config{
-		Stdin:             stdin,
-		Output:            inv.Stdout,
-		Error:             inv.Stderr,
-		Argv0:             "awk",
-		Args:              inputs,
-		NoArgVars:         opts.noArgVars,
-		Vars:              buildAWKVars(&opts),
-		Environ:           awkEnviron(inv.Env),
-		InputMode:         opts.inputMode,
-		FileOpener:        newAWKFileOpener(ctx, inv, stdin),
-		FileWriter:        newAWKFileWriter(ctx, inv),
-		ShellRunner:       newAWKShellRunner(ctx, inv),
-		PipeReader:        newAWKPipeReader(ctx, inv),
+		Stdin:     &countingReader{r: stdin, c: prog},
+		Output:    &countingWriter{w: inv.Stdout, c: prog},
+		Error:     inv.Stderr,
+		Argv0:     "awk",
+		Args:      inputs,
+		NoArgVars: opts.noArgVars,
+		Vars:      buildAWKVars(&opts),
+		Environ:   awkEnviron(inv.Env),
+		InputMode: opts.inputMode,
+		FileOpener: func(name string) (io.ReadCloser, error) {
+			file, err := fileOpener(name)
+			if err != nil {
+				return nil, err
+			}
+			return &countingReadCloser{r: file, c: prog}, nil
+		},
+		FileWriter: func(name string, appendMode bool) (io.WriteCloser, error) {
+			file, err := fileWriter(name, appendMode)
+			if err != nil {
+				return nil, err
+			}
+			return &countingWriteCloser{w: file, c: prog}, nil
+		},
+		ShellRunner: newAWKShellRunner(ctx, inv),
+		PipeReader: func(code string, stdin io.Reader, stderr io.Writer) (io.ReadCloser, func() (int, error), error) {
+			reader, wait, err := pipeReader(code, stdin, stderr)
+			if err != nil {
+				return nil, nil, err
+			}
+			return &countingReadCloser{r: reader, c: prog}, wait, nil
+		},
 		PipeWriter:        newAWKPipeWriter(ctx, inv),
 		CurrentRecordHook: nativeState.setCurrentRecord,
 		Funcs:             funcs,
 	}
-	status, err := interp.ExecProgram(compiled, config)
+
+	// 执行 ctx：外部取消（bg kill / exec 超时 / 断连）经 ctx 传进解释器
+	// （VM 每 1000 条指令查一次）——此前 ExecProgram 不带 ctx，取消对 awk
+	// 完全无效，曾出现「bg kill 报 killed、解释器仍占满一个核」的事故。
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stall := stallLimit(inv.Env)
+	stopWatchdog := make(chan struct{})
+	go watchStall(runCtx, cancel, prog, stall, stopWatchdog)
+
+	vm, err := interp.New(compiled)
 	if err != nil {
+		close(stopWatchdog)
+		return exitCodef(inv, 1, "awk: %v", err)
+	}
+	status, err := vm.ExecuteContext(runCtx, config)
+	close(stopWatchdog)
+	if err != nil {
+		if errors.Is(context.Cause(runCtx), errAWKStall) {
+			return exitf(inv, "awk: %v (no input/output progress for %s — possible infinite loop)", errAWKStall, stall)
+		}
 		return exitf(inv, "awk: %v", err)
 	}
 	if status != 0 {
