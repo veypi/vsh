@@ -227,7 +227,9 @@ func (c *Curl) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedCo
 	}
 
 	requestURL := opts.url
-	if !strings.HasPrefix(requestURL, "http://") && !strings.HasPrefix(requestURL, "https://") {
+	// 单斜杠路径是平台相对 URL，由网络客户端按 cloud/host 配置补全；
+	// 不能在这里补成 https:///path。其他无 scheme 输入保持原有默认行为。
+	if !strings.HasPrefix(requestURL, "/") && !strings.HasPrefix(requestURL, "http://") && !strings.HasPrefix(requestURL, "https://") {
 		requestURL = "https://" + requestURL
 	}
 

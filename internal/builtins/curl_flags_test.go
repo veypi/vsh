@@ -131,6 +131,20 @@ func TestCurlSupportsAuthCookiesRemoteNameAndWriteOut(t *testing.T) {
 	}
 }
 
+func TestCurlPreservesPlatformRelativeURL(t *testing.T) {
+	t.Parallel()
+	client := &curlStubClient{}
+	session := newSession(t, &Config{NetworkClient: client})
+	result := mustExecSession(t, session, "curl -s /skills/cloud/demo/manifest\n")
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, stderr = %q", result.ExitCode, result.Stderr)
+	}
+	req := client.LastRequest()
+	if req == nil || req.URL != "/skills/cloud/demo/manifest" {
+		t.Fatalf("request URL = %q, want unchanged platform path", req.URL)
+	}
+}
+
 func TestCurlSupportsHelpWithoutNetworkClient(t *testing.T) {
 	t.Parallel()
 	session := newSession(t, &Config{NetworkClient: &curlStubClient{}})
