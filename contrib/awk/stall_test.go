@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	gbruntime "github.com/veypi/vsh"
 )
 
 // 回归（生产事故 2026-10-31）：ctx 取消必须能打断 awk 解释器。此前 contrib
@@ -90,5 +92,33 @@ func TestAWKStallDetectionCanBeDisabled(t *testing.T) {
 	}
 	if got := stallLimit(nil); got != defaultStallLimit {
 		t.Fatalf("stallLimit(nil) = %s, want %s", got, defaultStallLimit)
+	}
+}
+
+func TestAWKFlushesBufferedStdout(t *testing.T) {
+	t.Parallel()
+
+	result := runAWKCommand(t, &awkCommandOptions{
+		Args:           []string{"BEGIN{print \"ok\"}"},
+		BufferedStdout: true,
+	})
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0; stderr=%q", result.ExitCode, result.Stderr)
+	}
+	if got, want := result.Stdout, "ok\n"; got != want {
+		t.Fatalf("Stdout = %q, want %q (buffered stdout must be flushed)", got, want)
+	}
+}
+
+func TestAWKPipeOutputCountsAsProgress(t *testing.T) {
+	result, err := newAWKRuntime(t).Run(context.Background(), &gbruntime.ExecutionRequest{
+		Script: `awk 'BEGIN { for (i = 0; i < 300000; i++) { print i | "cat > /data/piped.txt" } close("cat > /data/piped.txt") }'`,
+		Env:    map[string]string{stallLimitEnv: "1"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0; pipe-only output is progress; stderr=%q", result.ExitCode, result.Stderr)
 	}
 }

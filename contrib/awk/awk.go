@@ -100,6 +100,7 @@ func (c *AWK) Run(ctx context.Context, inv *commands.Invocation) error {
 	fileOpener := newAWKFileOpener(ctx, inv, stdin)
 	fileWriter := newAWKFileWriter(ctx, inv)
 	pipeReader := newAWKPipeReader(ctx, inv)
+	pipeWriter := newAWKPipeWriter(ctx, inv)
 
 	config := &interp.Config{
 		Stdin:     &countingReader{r: stdin, c: prog},
@@ -133,7 +134,13 @@ func (c *AWK) Run(ctx context.Context, inv *commands.Invocation) error {
 			}
 			return &countingReadCloser{r: reader, c: prog}, wait, nil
 		},
-		PipeWriter:        newAWKPipeWriter(ctx, inv),
+		PipeWriter: func(code string, stdout, stderr io.Writer) (io.WriteCloser, func() (int, error), error) {
+			writer, wait, err := pipeWriter(code, stdout, stderr)
+			if err != nil {
+				return nil, nil, err
+			}
+			return &countingWriteCloser{w: writer, c: prog}, wait, nil
+		},
 		CurrentRecordHook: nativeState.setCurrentRecord,
 		Funcs:             funcs,
 	}

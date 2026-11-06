@@ -104,10 +104,11 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (w *countingWriter) Flush() {
+func (w *countingWriter) Flush() error {
 	if f, ok := w.w.(interface{ Flush() error }); ok {
-		_ = f.Flush()
+		return f.Flush()
 	}
+	return nil
 }
 
 // countingWriteCloser 统计写入文件的字节数（print > "file" 同样是进展）。

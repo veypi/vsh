@@ -1,8 +1,10 @@
 package awk
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -45,11 +47,12 @@ func mustExecAWK(tb testing.TB, script string) *gbruntime.ExecutionResult {
 }
 
 type awkCommandOptions struct {
-	Args  []string
-	Env   map[string]string
-	Stdin string
-	Files map[string]string
-	Now   time.Time
+	Args           []string
+	Env            map[string]string
+	Stdin          string
+	Files          map[string]string
+	Now            time.Time
+	BufferedStdout bool
 	// Ctx 覆盖执行上下文（默认 context.Background）——取消/超时路径的测试用。
 	Ctx context.Context
 }
@@ -84,12 +87,16 @@ func runAWKCommand(tb testing.TB, opts *awkCommandOptions) awkCommandResult {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	stdoutWriter := io.Writer(&stdout)
+	if opts.BufferedStdout {
+		stdoutWriter = bufio.NewWriter(&stdout)
+	}
 	invOpts := &commands.InvocationOptions{
 		Args:       append([]string(nil), opts.Args...),
 		Env:        opts.Env,
 		Cwd:        "/",
 		Stdin:      strings.NewReader(opts.Stdin),
-		Stdout:     &stdout,
+		Stdout:     stdoutWriter,
 		Stderr:     &stderr,
 		FileSystem: mem,
 		Policy:     policy.NewStatic(&policy.Config{}),
