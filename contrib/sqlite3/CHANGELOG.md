@@ -5,7 +5,7 @@
 
 ## 未发布
 
-- **长查询可被取消**：连接打开后接上 `conn.SetInterrupt(ctx)`（`ncruces/go-sqlite3` 原生支持），ctx 取消（`bg kill` / exec 超时 / 断连）时打断正在执行的 SQL——此前长查询不理会取消，只能等它自己跑完（与 awk 同类缺陷：进程内命令对取消无感）。
+- **长查询可被取消**：连接打开后接上 `conn.SetInterrupt(ctx)`（`ncruces/go-sqlite3` 原生支持），ctx 取消（`bg kill` / exec 超时 / 断连）时打断正在执行的 SQL——此前长查询不理会取消，只能等它自己跑完（与 awk 同类缺陷：进程内命令对取消无感）。回归：无限递归 CTE 在 ctx 取消后实际中断。
 
 ## v0.1.0 — 2026-10-07
 

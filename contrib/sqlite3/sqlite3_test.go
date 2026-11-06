@@ -2,8 +2,13 @@ package sqlite3
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	gbruntime "github.com/veypi/vsh"
 )
 
 func TestSQLite3SupportsMemoryDatabase(t *testing.T) {
@@ -53,6 +58,42 @@ func TestSQLite3ReadsSQLFromStdin(t *testing.T) {
 	}
 	if got, want := result.Stdout, "7\n"; got != want {
 		t.Fatalf("Stdout = %q, want %q", got, want)
+	}
+}
+
+func TestSQLite3StopsLongQueryOnContextCancel(t *testing.T) {
+	session := newSQLiteSession(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(200*time.Millisecond, cancel)
+
+	var result *gbruntime.ExecutionResult
+	var execErr error
+	done := make(chan struct{})
+	go func() {
+		result, execErr = session.Exec(ctx, &gbruntime.ExecutionRequest{
+			Script: `sqlite3 :memory: "WITH RECURSIVE x(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM x) SELECT sum(n) FROM x;"`,
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sqlite3 did not stop after context cancel")
+	}
+	if execErr != nil {
+		if !errors.Is(execErr, context.Canceled) {
+			t.Fatalf("Session.Exec() error = %v, want context cancellation", execErr)
+		}
+		return
+	}
+	if result == nil || result.ExitCode == 0 {
+		t.Fatalf("result = %+v, want interrupted query", result)
+	}
+	stderr := strings.ToLower(result.Stderr)
+	if !strings.Contains(stderr, "interrupt") && !strings.Contains(stderr, "context canceled") {
+		t.Fatalf("Stderr = %q, want interruption error", result.Stderr)
 	}
 }
 
