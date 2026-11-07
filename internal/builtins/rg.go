@@ -148,6 +148,7 @@ func (c *RG) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedComm
 	if err != nil {
 		return err
 	}
+	indexLiterals := rgIndexLiterals(&opts.grep)
 
 	state := &grepRunState{}
 	if len(paths) == 0 && !invInputLooksLikeTTY(inv) {
@@ -164,7 +165,7 @@ func (c *RG) RunParsed(ctx context.Context, inv *Invocation, matches *ParsedComm
 		for _, target := range targets {
 			records := make([]rgFileRecord, 0, 16)
 			visitedDirs := make(map[string]string)
-			if err := c.enumerateTarget(ctx, inv, &opts, state, target, defaultShowExplicit, visitedDirs, &records); err != nil {
+			if err := c.enumerateTarget(ctx, inv, &opts, state, target, defaultShowExplicit, visitedDirs, indexLiterals, &records); err != nil {
 				return err
 			}
 			for _, record := range records {
@@ -379,7 +380,7 @@ func (c *RG) runFiles(ctx context.Context, inv *Invocation, opts *rgOptions, pat
 	for _, target := range targets {
 		records := make([]rgFileRecord, 0, 16)
 		visitedDirs := make(map[string]string)
-		if err := c.enumerateTarget(ctx, inv, opts, state, target, defaultShowExplicit, visitedDirs, &records); err != nil {
+		if err := c.enumerateTarget(ctx, inv, opts, state, target, defaultShowExplicit, visitedDirs, nil, &records); err != nil {
 			return err
 		}
 		for _, record := range records {
@@ -402,7 +403,7 @@ func (c *RG) runFiles(ctx context.Context, inv *Invocation, opts *rgOptions, pat
 	return &ExitError{Code: 1}
 }
 
-func (c *RG) enumerateTarget(ctx context.Context, inv *Invocation, opts *rgOptions, state *grepRunState, target rgTarget, defaultShowExplicit bool, visitedDirs map[string]string, records *[]rgFileRecord) error {
+func (c *RG) enumerateTarget(ctx context.Context, inv *Invocation, opts *rgOptions, state *grepRunState, target rgTarget, defaultShowExplicit bool, visitedDirs map[string]string, literals []string, records *[]rgFileRecord) error {
 	linfo, abs, exists, err := lstatMaybe(ctx, inv, target.path)
 	if err != nil {
 		if grepShouldPropagateError(err) {
@@ -442,6 +443,9 @@ func (c *RG) enumerateTarget(ctx context.Context, inv *Invocation, opts *rgOptio
 				grepNoteFileError(inv, &opts.grep, state, target.displayBase, err)
 				return nil
 			}
+		}
+		if used, err := c.enumerateIndexedTarget(ctx, inv, opts, state, abs, logicalAbs, target.displayBase, initialRules, gitRoot, literals, records); used || err != nil {
+			return err
 		}
 		return c.walkRecursive(ctx, inv, opts, state, abs, logicalAbs, target.displayBase, true, visitedDirs, initialRules, gitRoot, records)
 	}

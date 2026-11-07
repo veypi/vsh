@@ -3,6 +3,14 @@
 本仓版本从 0.1.0 开始记录（0.1.0 之前的代码基础与归属见 README「来源与署名」）。
 版本号见 [VERSION](VERSION)，遵循 SemVer：破坏性变更进位 minor。
 
+## 未发布
+
+- **可选常驻文件索引（`commands.FileIndex`）**：新增 `commands.FileIndex` 能力接口与
+  `WithFileIndex` 选项；`Invocation` 经 `policyFileIndex` 包一层，按当前文件系统策略逐个
+  校验候选路径（索引不授予访问权，也不替代真实匹配）。内置 `rg` 在模式可提取必选字面量
+  （长度 ≥ 3）时向索引取候选子集，未提供索引或索引不适用时保持实时遍历；
+  `RGIndexCacheKey` 暴露索引修订号，供派生缓存失效。测试：`commands`、`internal/builtins`。
+
 ## 0.3.3 — 2026-10-27
 
 ### 破坏性接口调整

@@ -41,6 +41,7 @@ type InvocationOptions struct {
 	Trace                 trace.Recorder
 	Exec                  func(context.Context, *ExecutionRequest) (*ExecutionResult, error)
 	Interact              func(context.Context, *InteractiveRequest) (*InteractiveResult, error)
+	FileIndex             FileIndex
 	LookupCommand         LookupCommandFunc
 	GetRegisteredCommands func() []string
 }
@@ -92,6 +93,9 @@ func NewInvocation(opts *InvocationOptions) *Invocation {
 		trace:  opts.Trace,
 		stderr: opts.Stderr,
 		limits: inv.Limits,
+	}
+	if opts.FileIndex != nil {
+		inv.FileIndex = &policyFileIndex{index: opts.FileIndex, fs: inv.FS}
 	}
 	if opts.Network != nil {
 		inv.Fetch = func(ctx context.Context, req *network.Request) (*network.Response, error) {

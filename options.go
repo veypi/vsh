@@ -62,6 +62,9 @@ func WithConfig(cfg *Config) Option {
 		if cfg.FileCommands != nil {
 			target.FileCommands = cfg.FileCommands
 		}
+		if cfg.FileIndex != nil {
+			target.FileIndex = cfg.FileIndex
+		}
 		return nil
 	}
 }
@@ -143,6 +146,11 @@ func WithBaseEnv(env map[string]string) Option {
 // WithFileCommandResolver installs the resolver for executable-file commands.
 func WithFileCommandResolver(resolver commands.FileCommandResolver) Option {
 	return func(target *Config) error { target.FileCommands = resolver; return nil }
+}
+
+// WithFileIndex installs an optional resident rg candidate index.
+func WithFileIndex(index commands.FileIndex) Option {
+	return func(target *Config) error { target.FileIndex = index; return nil }
 }
 
 // WithHost replaces the host adapter used by the runtime.

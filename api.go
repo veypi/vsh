@@ -103,6 +103,10 @@ type Config struct {
 	// FileCommands constructs regular commands for resolved executable files.
 	// Nil leaves executable files without a command implementation.
 	FileCommands commands.FileCommandResolver
+
+	// FileIndex optionally accelerates rg file enumeration and content candidates.
+	// Nil keeps the ordinary real-time filesystem walk.
+	FileIndex commands.FileIndex
 }
 
 // Option mutates a [Config] before [New] constructs the runtime.

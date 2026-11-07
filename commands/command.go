@@ -44,6 +44,7 @@ type Invocation struct {
 	Fetch                 FetchFunc
 	Exec                  func(context.Context, *ExecutionRequest) (*ExecutionResult, error)
 	Interact              func(context.Context, *InteractiveRequest) (*InteractiveResult, error)
+	FileIndex             FileIndex
 	Limits                policy.Limits
 	LookupCommand         LookupCommandFunc
 	GetRegisteredCommands func() []string

@@ -62,6 +62,7 @@ type Execution struct {
 	Stderr             io.Writer
 	FS                 gbfs.FileSystem
 	Network            network.Client
+	FileIndex          commands.FileIndex
 	Registry           commands.CommandRegistry
 	Policy             policy.Policy
 	Trace              trace.Recorder
@@ -837,6 +838,7 @@ func invokeResolvedCommand(
 		SetTime:       exec.SetTime,
 		FileSystem:    exec.FS,
 		Network:       exec.Network,
+		FileIndex:     exec.FileIndex,
 		Policy:        exec.Policy,
 		Trace:         exec.Trace,
 		Exec:          subexecInvoker(exec.Exec, currentEnv, virtualWD),
