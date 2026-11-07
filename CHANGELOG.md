@@ -3,13 +3,33 @@
 本仓版本从 0.1.0 开始记录（0.1.0 之前的代码基础与归属见 README「来源与署名」）。
 版本号见 [VERSION](VERSION)，遵循 SemVer：破坏性变更进位 minor。
 
-## 未发布
+## 0.3.4 — 2026-11-07
+
+### 可选常驻文件索引（`commands.FileIndex`）
 
 - **可选常驻文件索引（`commands.FileIndex`）**：新增 `commands.FileIndex` 能力接口与
   `WithFileIndex` 选项；`Invocation` 经 `policyFileIndex` 包一层，按当前文件系统策略逐个
   校验候选路径（索引不授予访问权，也不替代真实匹配）。内置 `rg` 在模式可提取必选字面量
   （长度 ≥ 3）时向索引取候选子集，未提供索引或索引不适用时保持实时遍历；
   `RGIndexCacheKey` 暴露索引修订号，供派生缓存失效。测试：`commands`、`internal/builtins`。
+
+### 解释器可取消与停滞自限（awk / sqlite3）
+
+- **awk 解释器可取消**：解释器改走 `interp.ExecuteContext`，VM 每 1000 条指令检查一次
+  `ctx`，bg kill / exec 超时 / 断连的取消信号能到达 VM。起因是 2026-10-31 生产事故：
+  用户脚本 `while` 循环索引写错，对着 3.8MB 单行 XML 无限循环，bg kill 回报 killed
+  但解释器 goroutine 仍占满一个核（累计 119 CPU 小时、持续 5 天）。
+- **新增停滞检测**：输入无新字节且输出无新字节超过阈值（默认 120s，`VSH_AWK_MAX_STALL`
+  以秒覆盖，0=关闭）即中止，报 `stalled … possible infinite loop`。进展信号 = 读入字节 +
+  写出字节（含 `print > "file"` 与管道写入，管道经 counting writer 计入并及时 flush）。
+- **sqlite3 长查询可中断**：连接接 `SetInterrupt(ctx)`，此前只能等长查询跑完。
+- 回归：`contrib/awk/stall_test.go`（ctx 取消 0.3s 内中止、死循环 1s 内自限、正常脚本不受
+  影响、阈值可关闭、管道输出不计停滞）、`contrib/sqlite3` 递归 CTE 取消用例。
+
+### curl 保留平台相对 URL
+
+- **以单个 `/` 开头的输入不再被改写成 `https://…`**：`/skills/...` 这类平台相对 URL 原样
+  送到网络层，不会变成 `https:///skills/...`。测试：`internal/builtins`。
 
 ## 0.3.3 — 2026-10-27
 
