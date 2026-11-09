@@ -7,9 +7,9 @@ import (
 )
 
 // 身份键必须出现在「命令可见环境」里：内建命令读的是命令可见环境
-//（commands.NewInvocation 的 Env ← invokeResolvedCommand 的 currentEnv）。
+// （commands.NewInvocation 的 Env ← invokeResolvedCommand 的 currentEnv）。
 // UID/EUID 缺失时 vsh 回落默认虚拟身份（1000）——在真实属主不是 1000 的设备上
-//（macOS 桌面用户 uid=501），按 POSIX 权限档判定的内建会落 group 档而不是属主档，
+// （macOS 桌面用户 uid=501），按 POSIX 权限档判定的内建会落 group 档而不是属主档，
 // 把属主可写的目录误判为不可写（0755 目录里内建 mv 报 Permission denied，原生
 // /bin/mv 正常）。
 func TestIdentityKeysReachCommandEnv(t *testing.T) {
