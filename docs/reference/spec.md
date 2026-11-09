@@ -426,6 +426,7 @@ type ExecutionResult struct {
     Events          []trace.Event
     StdoutTruncated bool
     StderrTruncated bool
+    Attrs           map[string]string
 }
 
 type TraceMode uint8
@@ -481,6 +482,11 @@ type CommandFunc func(ctx context.Context, inv *Invocation) error
 
 func DefineCommand(name string, fn CommandFunc) Command
 
+type ResultAttrs struct { /* concurrency-safe command result metadata */ }
+func NewResultAttrs() *ResultAttrs
+func (*ResultAttrs) Set(key, value string)
+func (*ResultAttrs) Snapshot() map[string]string
+
 type Invocation struct {
     Args                  []string
     Env                   map[string]string
@@ -495,6 +501,8 @@ type Invocation struct {
     Limits                Limits
     GetRegisteredCommands func() []string
 }
+
+func (*Invocation) SetResultAttr(key, value string) error
 
 type CommandFS struct {
     // runtime-owned, policy-aware filesystem facade for commands
@@ -579,6 +587,8 @@ type PolicyEvent struct {
 The command-facing `Invocation` is capability-only. Custom commands get sandboxed filesystem and fetch helpers plus nested execution and limits metadata, but they do not receive the raw policy object, raw trace recorder, raw network client, or raw host tty handles. Policy checks and file-access tracing happen behind `Invocation.FS`, `Invocation.Fetch` is nil unless network access is configured, and interactive terminal reopening is mediated by the runtime-owned `/dev/tty` device inside the sandbox namespace.
 
 The command-facing `Invocation` also exposes runtime-owned wall-clock helpers. `Invocation.Now()` returns the current session clock and `Invocation.SetTime(time.Time)` updates it when the runtime supports mutation. The default runtime wires these helpers to the session-local virtual wall clock described above, so time-sensitive builtins stay deterministic and sandbox-scoped without exposing host clock mutation.
+
+Commands attach non-stdio result metadata with `Invocation.SetResultAttr`. One concurrency-safe `ResultAttrs` collector is shared by all command invocations in a script, and its independent snapshot is returned as `ExecutionResult.Attrs`. This channel is intended for structured execution metadata such as image attachments; stdout and stderr remain the command's byte streams. A manually constructed invocation without a collector rejects metadata writes explicitly.
 
 Registry semantics are override-friendly: later registrations replace earlier ones so embedders can swap in custom implementations for built-ins, and `RegisterLazy` defers expensive command setup until first execution while still participating in `PATH` resolution and `Names()`.
 

@@ -59,6 +59,7 @@ type ExecutionResult struct {
 	Events          []trace.Event
 	StdoutTruncated bool
 	StderrTruncated bool
+	Attrs           map[string]string
 
 	// commandNotFound records a command-resolution miss for nested execution
 	// callbacks (commands.ExecutionResult).
@@ -129,6 +130,7 @@ func (result *ExecutionResult) commandResult() *commands.ExecutionResult {
 		Events:          cloneTraceEvents(result.Events),
 		StdoutTruncated: result.StdoutTruncated,
 		StderrTruncated: result.StderrTruncated,
+		Attrs:           copyStringMap(result.Attrs),
 	}
 }
 

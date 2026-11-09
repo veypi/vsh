@@ -168,6 +168,7 @@ func (s *Session) exec(ctx context.Context, req *ExecutionRequest) (*ExecutionRe
 		}
 		return result, err
 	}
+	resultAttrs := commands.NewResultAttrs()
 	execReq := &shell.Execution{
 		Name:             req.Name,
 		Interpreter:      req.Interpreter,
@@ -204,6 +205,7 @@ func (s *Session) exec(ctx context.Context, req *ExecutionRequest) (*ExecutionRe
 		SetTime:          s.setTime,
 		Exec:             s.subexecCallback,
 		Interact:         s.interactCallback,
+		ResultAttrs:      resultAttrs,
 	}
 	var (
 		runResult *shell.RunResult
@@ -231,6 +233,7 @@ func (s *Session) exec(ctx context.Context, req *ExecutionRequest) (*ExecutionRe
 		Events:          events,
 		StdoutTruncated: stdout.Truncated(),
 		StderrTruncated: stderr.Truncated(),
+		Attrs:           resultAttrs.Snapshot(),
 	}
 	if runResult != nil {
 		result.commandNotFound = runResult.CommandNotFound

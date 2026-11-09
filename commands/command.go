@@ -49,9 +49,10 @@ type Invocation struct {
 	LookupCommand         LookupCommandFunc
 	GetRegisteredCommands func() []string
 
-	trace   trace.Recorder
-	now     func() time.Time
-	setTime func(time.Time) error
+	resultAttrs *ResultAttrs
+	trace       trace.Recorder
+	now         func() time.Time
+	setTime     func(time.Time) error
 }
 
 type definedCommand struct {

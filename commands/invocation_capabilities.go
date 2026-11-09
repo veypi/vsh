@@ -44,6 +44,7 @@ type InvocationOptions struct {
 	FileIndex             FileIndex
 	LookupCommand         LookupCommandFunc
 	GetRegisteredCommands func() []string
+	ResultAttrs           *ResultAttrs
 }
 
 // CommandFS exposes filesystem operations with vsh policy checks and file
@@ -67,6 +68,10 @@ func NewInvocation(opts *InvocationOptions) *Invocation {
 		getCommands = func() []string { return nil }
 	}
 
+	resultAttrs := opts.ResultAttrs
+	if resultAttrs == nil {
+		resultAttrs = NewResultAttrs()
+	}
 	inv := &Invocation{
 		Argv0:                 opts.Argv0,
 		Args:                  append([]string(nil), opts.Args...),
@@ -81,6 +86,7 @@ func NewInvocation(opts *InvocationOptions) *Invocation {
 		Interact:              opts.Interact,
 		LookupCommand:         opts.LookupCommand,
 		GetRegisteredCommands: getCommands,
+		resultAttrs:           resultAttrs,
 		trace:                 opts.Trace,
 	}
 	if opts.Policy != nil {

@@ -53,6 +53,7 @@ type ExecutionResult struct {
 	Events          []trace.Event
 	StdoutTruncated bool
 	StderrTruncated bool
+	Attrs           map[string]string
 }
 
 // InteractiveRequest describes an interactive nested shell launched through

@@ -71,6 +71,7 @@ type Execution struct {
 	SetTime            func(time.Time) error
 	Exec               func(context.Context, *commands.ExecutionRequest) (*commands.ExecutionResult, error)
 	Interact           func(context.Context, *commands.InteractiveRequest) (*commands.InteractiveResult, error)
+	ResultAttrs        *commands.ResultAttrs
 	activeShellVariant shellvariant.ShellVariant
 	activeLangVariant  syntax.LangVariant
 	procSubst          *procSubstManager
@@ -843,6 +844,7 @@ func invokeResolvedCommand(
 		Trace:         exec.Trace,
 		Exec:          subexecInvoker(exec.Exec, currentEnv, virtualWD),
 		Interact:      interactiveInvoker(exec.Interact, currentEnv, virtualWD),
+		ResultAttrs:   exec.ResultAttrs,
 		LookupCommand: commandLookup(exec),
 		GetRegisteredCommands: func() []string {
 			if exec.Registry == nil {

@@ -3,6 +3,10 @@
 本仓版本从 0.1.0 开始记录（0.1.0 之前的代码基础与归属见 README「来源与署名」）。
 版本号见 [VERSION](VERSION)，遵循 SemVer：破坏性变更进位 minor。
 
+## 0.3.5 — 2026-11-10
+
+- **命令结果元数据通道**：新增并发安全的 `commands.ResultAttrs` 与 `Invocation.SetResultAttr`；一次脚本执行中的命令共享 collector，结果经 `ExecutionResult.Attrs` 返回独立快照。该通道承载图片附件等不适合写入 stdout 的结构化元数据；无 collector 的手工 Invocation 明确拒绝写入。测试覆盖命令透传、执行间隔离、并发写入与快照独立性。
+
 ## 0.3.4 — 2026-11-07
 
 ### 可选常驻文件索引（`commands.FileIndex`）
